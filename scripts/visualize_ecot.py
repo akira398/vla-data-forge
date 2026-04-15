@@ -1,11 +1,37 @@
 """
-CLI: Inspect the Embodied-CoT JSON file.
+CLI: Inspect the Embodied-CoT JSON file (embodied_features_bridge.json).
 
-Prints keys, value structure, and sample entries — no figures, no parsing.
+JSON structure:
+  {
+    "/path/to/bridge_episode/out.npy": [       ← episode key (= Bridge v2 path)
+      {                                         ← one dict per step
+        "frame_index":          0,
+        "language_instruction": "pick up ...",
+        "task":                 "...",          ← high-level task
+        "plan":                 "...",          ← multi-step plan
+        "subtask_reason":       "...",          ← why this subtask
+        "subtask":              "...",          ← current subtask label
+        "move_reason":          "...",          ← why this motion
+        "move":                 "...",          ← motion description
+        "gripper":              "...",          ← future gripper positions (5-step lookahead)
+        "bboxes":               "...",          ← visible objects + bounding boxes
+        "action":               [x,y,z,r,p,y,g] ← 7-DoF action
+      },
+      ...
+    ],
+    ...
+  }
 
 Usage
 -----
+# Inspect structure + print first N episodes:
 python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge
+
+# Print more episodes:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge --n 10
+
+# Show all steps for the first episode:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge --steps
 """
 
 from __future__ import annotations
@@ -18,7 +44,6 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich import print as rprint
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -26,93 +51,116 @@ app = typer.Typer(help="Inspect the Embodied-CoT JSON file.")
 console = Console()
 
 
+def _find_json(path: Path) -> Path:
+    if path.is_file() and path.suffix == ".json":
+        return path
+    candidates = sorted(
+        f for f in path.rglob("*.json")
+        if not f.name.startswith(".")
+        and f.name not in ("dataset_info.json", "dataset_dict.json")
+    )
+    if not candidates:
+        console.print(f"[red]No .json files found under {path}[/red]")
+        console.print(f"Contents: {[x.name for x in path.iterdir()]}")
+        raise typer.Exit(1)
+    return candidates[0]
+
+
 @app.command()
 def main(
     local_path: Path = typer.Option(
         ..., "--local-path", "-p",
-        help="Directory containing embodied_features_bridge.json",
+        help="Directory containing embodied_features_bridge.json (or path to the file itself).",
     ),
-    n: int = typer.Option(5, "--n", help="Number of sample entries to print."),
+    n: int = typer.Option(5, "--n", help="Number of episodes to show."),
+    steps: bool = typer.Option(False, "--steps", help="Print all steps of the first episode."),
 ) -> None:
 
-    # ── find the JSON file ────────────────────────────────────────────────────
-    p = Path(local_path)
-    if p.is_file():
-        json_file = p
-    else:
-        candidates = sorted(
-            f for f in p.rglob("*.json")
-            if f.name not in ("dataset_info.json", "dataset_dict.json")
-            and not f.name.startswith(".")
-        )
-        if not candidates:
-            console.print(f"[red]No .json files found under {p}[/red]")
-            console.print(f"Contents: {[x.name for x in p.iterdir()]}")
-            raise typer.Exit(1)
-        json_file = candidates[0]
-
+    json_file = _find_json(Path(local_path))
     size_mb = json_file.stat().st_size / 1e6
     console.print(f"\n[bold]File:[/bold] {json_file}  ({size_mb:.0f} MB)")
-    console.print("Loading… (may take a moment for large files)\n")
+    console.print("Loading… (may take ~30s for the full 1.4 GB file)\n")
 
     with open(json_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # ── top-level structure ───────────────────────────────────────────────────
-    console.print(f"[bold]Top-level type:[/bold] {type(data).__name__}")
+    # ── top-level stats ───────────────────────────────────────────────────────
+    console.print(f"[bold]Top-level type:[/bold]     {type(data).__name__}")
+    console.print(f"[bold]Total episodes:[/bold]     {len(data):,}")
 
-    if isinstance(data, dict):
-        keys = list(data.keys())
-        console.print(f"[bold]Total entries:[/bold] {len(keys):,}\n")
+    ep_keys = list(data.keys())
+    first_val = data[ep_keys[0]]
+    console.print(f"[bold]Value type:[/bold]         {type(first_val).__name__}")
 
-        # Key samples
-        console.print(f"[bold]Sample keys ({min(n, len(keys))}):[/bold]")
-        for k in keys[:n]:
-            console.print(f"  {k}")
+    if isinstance(first_val, list) and first_val:
+        console.print(f"[bold]Steps per episode:[/bold]  e.g. {len(first_val)} (first episode)")
+        console.print(f"[bold]Step fields:[/bold]        {list(first_val[0].keys())}")
+    elif isinstance(first_val, dict):
+        console.print(f"[bold]Episode fields:[/bold]     {list(first_val.keys())}")
 
-        # Value structure from first entry
-        first_val = data[keys[0]]
-        console.print(f"\n[bold]Value type:[/bold] {type(first_val).__name__}")
+    # ── episode summary table ─────────────────────────────────────────────────
+    console.print()
+    t = Table(title=f"First {min(n, len(ep_keys))} episodes", show_lines=True)
+    t.add_column("#",          style="cyan",  justify="right", no_wrap=True)
+    t.add_column("Episode path (key)",         overflow="fold", max_width=50)
+    t.add_column("Steps",      justify="right", no_wrap=True)
+    t.add_column("Instruction",                overflow="fold", max_width=40)
+    t.add_column("Task",                       overflow="fold", max_width=40)
+    t.add_column("Action[0] (7-DoF)",          overflow="fold", max_width=35)
 
-        if isinstance(first_val, dict):
-            console.print(f"[bold]Value keys:[/bold] {list(first_val.keys())}\n")
-
-            # Print sample entries as a table
-            t = Table(title=f"First {min(n, len(keys))} entries", show_lines=True)
-            t.add_column("Key (episode path)", overflow="fold", max_width=55)
-            for field in first_val.keys():
-                t.add_column(field, overflow="fold", max_width=30)
-
-            for k in keys[:n]:
-                v = data[k]
-                if isinstance(v, dict):
-                    t.add_row(k, *[str(v.get(field, ""))[:120] for field in first_val.keys()])
-                else:
-                    t.add_row(k, str(v)[:120])
-            console.print(t)
-
-        elif isinstance(first_val, list):
-            console.print(f"[bold]List length (first entry):[/bold] {len(first_val)}")
-            if first_val and isinstance(first_val[0], dict):
-                console.print(f"[bold]Item keys:[/bold] {list(first_val[0].keys())}")
-            console.print("\n[bold]First entry, first item:[/bold]")
-            console.print(Panel(json.dumps(first_val[0], indent=2)[:800], expand=False))
-
+    for i, key in enumerate(ep_keys[:n]):
+        val = data[key]
+        if isinstance(val, list) and val:
+            first_step = val[0]
+            instr   = first_step.get("language_instruction", "")[:40]
+            task    = first_step.get("task", "")[:40]
+            action  = first_step.get("action")
+            act_str = str([round(x, 3) for x in action]) if action else "—"
+            n_steps = str(len(val))
+        elif isinstance(val, dict):
+            instr   = val.get("language_instruction", "")[:40]
+            task    = val.get("task", "")[:40]
+            action  = val.get("action")
+            act_str = str([round(x, 3) for x in action]) if action else "—"
+            n_steps = "1"
         else:
-            console.print(Panel(json.dumps(first_val, indent=2)[:800], expand=False))
+            instr, task, act_str, n_steps = "", "", "—", "?"
+        t.add_row(str(i), key[-50:], n_steps, instr, task, act_str)
 
-    elif isinstance(data, list):
-        console.print(f"[bold]Total entries:[/bold] {len(data):,}\n")
-        first = data[0]
-        console.print(f"[bold]Item type:[/bold] {type(first).__name__}")
-        if isinstance(first, dict):
-            console.print(f"[bold]Item keys:[/bold] {list(first.keys())}\n")
-        console.print(f"[bold]First {min(n, len(data))} items:[/bold]")
-        for item in data[:n]:
-            console.print(Panel(json.dumps(item, indent=2)[:800], expand=False))
+    console.print(t)
 
-    else:
-        console.print(Panel(str(data)[:1000], expand=False))
+    # ── all steps for first episode ───────────────────────────────────────────
+    if steps:
+        key = ep_keys[0]
+        val = data[key]
+        step_list = val if isinstance(val, list) else [val]
+
+        console.print(f"\n[bold]All steps for episode:[/bold] {key}\n")
+
+        st = Table(title=f"{len(step_list)} steps", show_lines=True)
+        st.add_column("frame", justify="right", no_wrap=True)
+        st.add_column("action (7-DoF)",    overflow="fold", max_width=40)
+        st.add_column("subtask",           overflow="fold", max_width=30)
+        st.add_column("move",              overflow="fold", max_width=30)
+        st.add_column("task_reason",       overflow="fold", max_width=40)
+        st.add_column("bboxes",            overflow="fold", max_width=35)
+
+        for s in step_list:
+            action = s.get("action")
+            act_str = str([round(x, 3) for x in action]) if action else "—"
+            st.add_row(
+                str(s.get("frame_index", "?")),
+                act_str,
+                (s.get("subtask") or "")[:30],
+                (s.get("move") or "")[:30],
+                (s.get("task") or "")[:40],
+                (s.get("bboxes") or "")[:35],
+            )
+        console.print(st)
+
+        # Full detail of first step
+        console.print("\n[bold]Full first step (raw JSON):[/bold]")
+        console.print(Panel(json.dumps(step_list[0], indent=2), expand=False))
 
     console.print("\n[bold green]Done.[/bold green]")
 

@@ -56,80 +56,77 @@ _REASONING_FIELDS = [
 ]
 
 
+def _parse_step(item: dict, index: int, n_steps: int) -> ECoTStep:
+    """
+    Parse one step dict from the JSON list.
+
+    Actual field names in embodied_features_bridge.json:
+      frame_index          int
+      language_instruction str
+      task                 str   high-level task description
+      plan                 str   multi-step plan
+      subtask_reason       str   why this subtask
+      subtask              str   current subtask label
+      move_reason          str   why this motion
+      move                 str   motion description
+      gripper              str   future gripper positions (5-step lookahead)
+      bboxes               str   visible objects + bounding boxes
+      action               list  7-DoF [Δx,Δy,Δz,Δroll,Δpitch,Δyaw,gripper]
+    """
+    step_index = item.get("frame_index", index)
+
+    raw_action = item.get("action")
+    if raw_action is not None:
+        action = np.asarray(raw_action, dtype=np.float32).flatten()
+    else:
+        action = np.zeros(7, dtype=np.float32)
+
+    reasoning = ReasoningTrace(
+        task_reasoning=item.get("task") or "",
+        subtask_reasoning=item.get("subtask_reason") or "",
+        move_reasoning=item.get("move_reason") or "",
+        gripper_reasoning=item.get("gripper") or "",
+        attribute_reasoning=item.get("bboxes") or "",
+        spatial_reasoning=item.get("plan") or "",
+        extra={
+            "subtask": item.get("subtask") or "",
+            "move":    item.get("move") or "",
+        },
+    )
+
+    return ECoTStep(
+        step_index=step_index,
+        observation=ECoTObservation(step_index=step_index, image=None),
+        action=action,
+        reasoning=reasoning,
+        is_first=(index == 0),
+        is_last=(index == n_steps - 1),
+    )
+
+
 def _parse_entry(episode_id: str, value: Any, ep_index: int) -> ECoTEpisode:
-    """
-    Parse one key-value pair from embodied_features_bridge.json into an ECoTEpisode.
-
-    The value may be:
-      - a dict with reasoning fields  (standard case)
-      - a list of per-step dicts      (step-level annotations)
-      - something else                (stored as raw metadata)
-    """
-    if isinstance(value, dict):
-        # Episode-level reasoning — create a single representative step
-        reasoning = ReasoningTrace(
-            task_reasoning=value.get("task_reasoning") or "",
-            subtask_reasoning=value.get("subtask_reasoning") or "",
-            move_reasoning=value.get("move_reasoning") or "",
-            gripper_reasoning=value.get("gripper_reasoning") or "",
-            attribute_reasoning=value.get("attribute_reasoning") or "",
-            spatial_reasoning=value.get("spatial_reasoning") or "",
-        )
-        # Try to find a language instruction
-        instruction = (
-            value.get("language_instruction")
-            or value.get("task")
-            or value.get("task_reasoning")  # fallback: use task reasoning as description
-            or ""
-        )
-        step = ECoTStep(
-            step_index=0,
-            observation=ECoTObservation(step_index=0, image=None),
-            action=np.zeros(7, dtype=np.float32),
-            reasoning=reasoning,
-            is_first=True,
-            is_last=True,
-        )
-        steps = [step]
-
-    elif isinstance(value, list):
-        # Step-level annotations
+    """Parse one key-value pair from embodied_features_bridge.json."""
+    if isinstance(value, list):
+        # Standard format: list of per-step dicts
         instruction = ""
         steps = []
         for i, item in enumerate(value):
             if not isinstance(item, dict):
                 continue
             if not instruction:
-                instruction = item.get("language_instruction") or item.get("task") or ""
-            reasoning = ReasoningTrace(
-                task_reasoning=item.get("task_reasoning") or "",
-                subtask_reasoning=item.get("subtask_reasoning") or "",
-                move_reasoning=item.get("move_reasoning") or "",
-                gripper_reasoning=item.get("gripper_reasoning") or "",
-                attribute_reasoning=item.get("attribute_reasoning") or "",
-                spatial_reasoning=item.get("spatial_reasoning") or "",
-            )
-            steps.append(ECoTStep(
-                step_index=i,
-                observation=ECoTObservation(step_index=i, image=None),
-                action=np.zeros(7, dtype=np.float32),
-                reasoning=reasoning,
-                is_first=(i == 0),
-                is_last=(i == len(value) - 1),
-            ))
-        if not steps:
-            steps = [ECoTStep(
-                step_index=0,
-                observation=ECoTObservation(step_index=0, image=None),
-                action=np.zeros(7, dtype=np.float32),
-                reasoning=None,
-                is_first=True,
-                is_last=True,
-            )]
+                instruction = item.get("language_instruction") or ""
+            steps.append(_parse_step(item, i, len(value)))
+
+    elif isinstance(value, dict):
+        # Episode-level dict (less common)
+        instruction = value.get("language_instruction") or value.get("task") or ""
+        steps = [_parse_step(value, 0, 1)]
 
     else:
-        # Unknown format — make a placeholder episode
         instruction = ""
+        steps = []
+
+    if not steps:
         steps = [ECoTStep(
             step_index=0,
             observation=ECoTObservation(step_index=0, image=None),
