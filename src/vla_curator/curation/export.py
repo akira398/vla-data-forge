@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 class ExportFormat(str, Enum):
     JSONL = "jsonl"
     HDF5 = "hdf5"
+    RLDS = "rlds"
 
 
 class BaseExporter(ABC):
@@ -205,5 +206,8 @@ def create_exporter(
         return JSONLExporter(output_dir, **kwargs)
     elif fmt == ExportFormat.HDF5:
         return HDF5Exporter(output_dir)
+    elif fmt == ExportFormat.RLDS:
+        from .rlds_export import RLDSExporter
+        return RLDSExporter(output_dir)
     else:
         raise ValueError(f"Unknown export format: {fmt!r}")

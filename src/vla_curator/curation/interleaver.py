@@ -42,6 +42,9 @@ from ..schemas.interleaved import (
 )
 from ..schemas.modalities import DepthMap, SceneGraph
 
+# Type alias used in index dicts
+_ECoTIndex = Dict[str, ECoTEpisode]
+
 logger = logging.getLogger(__name__)
 
 
@@ -295,6 +298,126 @@ class EpisodeInterleaver:
             steps=aligned_steps,
             alignment_metadata=alignment_meta,
             provenance=provenance,
+            schema_version=self.config.schema_version,
+        )
+
+    # ------------------------------------------------------------------
+    # Full-dataset iteration (all Bridge v2 episodes)
+    # ------------------------------------------------------------------
+
+    def iter_all_episodes(self) -> Iterator[InterleavedEpisode]:
+        """
+        Yield a merged episode for every Bridge v2 episode.
+
+        Episodes that have an ECoT match are merged with reasoning traces
+        (same as ``iter_episodes``).  Episodes with no ECoT match are
+        wrapped with empty reasoning strings so every Bridge v2 trajectory
+        ends up in the output.
+
+        Use this to produce the *full* RLDS dataset variant.
+        Use ``iter_episodes()`` when you only want matched episodes.
+        """
+        ecot_index = self._build_ecot_index()
+        logger.info("ECoT index built: %d entries.", len(ecot_index))
+
+        stats = {"matched": 0, "unmatched": 0, "errors": 0}
+
+        for bridge_ep in self.bridge_reader:
+            # Normalise the Bridge v2 key to find a matching ECoT episode
+            key = _normalize_episode_id(bridge_ep.episode_id, bridge_ep.source_file)
+            ecot_ep = ecot_index.get(key)
+
+            # Also try the raw source_file if the normalised key didn't match
+            if ecot_ep is None and bridge_ep.source_file:
+                ecot_ep = ecot_index.get(
+                    _normalize_episode_id(bridge_ep.source_file)
+                )
+
+            if ecot_ep is not None:
+                try:
+                    yield self.interleave(ecot_ep, bridge_ep)
+                    stats["matched"] += 1
+                except Exception:
+                    logger.exception(
+                        "Failed to interleave %s — falling back to empty reasoning.",
+                        bridge_ep.episode_id,
+                    )
+                    yield self._bridge_ep_empty(bridge_ep)
+                    stats["errors"] += 1
+            else:
+                yield self._bridge_ep_empty(bridge_ep)
+                stats["unmatched"] += 1
+
+        logger.info(
+            "iter_all_episodes complete: matched=%d, unmatched=%d, errors=%d",
+            stats["matched"],
+            stats["unmatched"],
+            stats["errors"],
+        )
+
+    def _build_ecot_index(self) -> _ECoTIndex:
+        """
+        Build an in-memory lookup table of ECoT episodes keyed by normalised
+        file path.
+
+        ECoT is loaded from a single JSON file so the full dataset fits in RAM.
+        We index each episode under its normalised path AND its raw path to
+        maximise the chance of a match regardless of normalisation differences.
+        """
+        index: _ECoTIndex = {}
+        for ep in self.ecot_reader:
+            # Normalised key (strips /nfs/.../numpy_256/ prefix)
+            norm_key = _normalize_episode_id(ep.episode_id)
+            index[norm_key] = ep
+            # Raw path (leading slash stripped) as fallback
+            raw_key = ep.episode_id.replace("\\", "/").lstrip("/")
+            if raw_key != norm_key:
+                index[raw_key] = ep
+        return index
+
+    def _bridge_ep_empty(self, bridge_ep: BridgeEpisode) -> InterleavedEpisode:
+        """
+        Wrap a Bridge v2 episode as an InterleavedEpisode with empty reasoning.
+
+        The episode ID is preserved exactly as-is so loading code can always
+        trace back to the original Bridge v2 trajectory.
+        """
+        aligned_steps: List[AlignedStep] = []
+        for step in bridge_ep.steps:
+            enriched_obs = _bridge_obs_to_enriched(step.observation)
+            enriched_obs.step_index = step.step_index
+            aligned_steps.append(AlignedStep(
+                step_index=step.step_index,
+                observation=enriched_obs,
+                action=step.action,
+                reasoning=None,
+                is_first=step.is_first,
+                is_last=step.is_last,
+                source_dataset="bridge_v2",
+                alignment_confidence=0.0,
+            ))
+
+        alignment_meta = AlignmentMetadata(
+            strategy="none",
+            ecot_episode_id="",
+            bridge_episode_id=bridge_ep.episode_id,
+            num_steps_ecot=0,
+            num_steps_bridge=len(bridge_ep),
+            num_aligned_steps=len(bridge_ep),
+            num_annotated_steps=0,
+            reasoning_coverage=0.0,
+        )
+
+        return InterleavedEpisode(
+            episode_id=bridge_ep.episode_id,   # original path preserved
+            task_description=bridge_ep.language_instruction or "",
+            steps=aligned_steps,
+            alignment_metadata=alignment_meta,
+            provenance=DataProvenance(
+                ecot_source="",
+                bridge_source=bridge_ep.episode_id,
+                curation_version=self.config.schema_version,
+            ),
             schema_version=self.config.schema_version,
         )
 

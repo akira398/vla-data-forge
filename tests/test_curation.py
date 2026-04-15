@@ -198,6 +198,127 @@ class TestNormalizeEpisodeId:
 
 
 # ---------------------------------------------------------------------------
+# iter_all_episodes
+# ---------------------------------------------------------------------------
+
+
+class TestIterAllEpisodes:
+    def _make_config(self):
+        return CurationConfig(
+            ecot=ECoTDatasetConfig(),
+            bridge=BridgeV2DatasetConfig(source="hdf5", local_path=Path("/fake")),
+            alignment_strategy="nearest",
+            output_dir=Path("/tmp/test_output"),
+            validate_output=False,
+        )
+
+    def test_matched_episode_has_reasoning(
+        self, sample_ecot_episode, sample_bridge_episode
+    ):
+        cfg = self._make_config()
+        interleaver = EpisodeInterleaver(
+            cfg,
+            MockECoTReader([sample_ecot_episode]),
+            MockBridgeReader([sample_bridge_episode]),
+        )
+        episodes = list(interleaver.iter_all_episodes())
+        assert len(episodes) == 1
+        # sample episodes share the same episode_id so they should match
+        assert episodes[0].reasoning_coverage() > 0
+
+    def test_unmatched_bridge_episode_included(
+        self, sample_ecot_episode, sample_bridge_episode
+    ):
+        """iter_all_episodes yields Bridge ep even when there is no ECoT match."""
+        cfg = self._make_config()
+        unrelated_bridge = BridgeEpisode(
+            episode_id="bridge_data_v2/unrelated/path/out.npy"
+        )
+        interleaver = EpisodeInterleaver(
+            cfg,
+            MockECoTReader([sample_ecot_episode]),
+            MockBridgeReader([unrelated_bridge]),
+        )
+        episodes = list(interleaver.iter_all_episodes())
+        assert len(episodes) == 1
+        assert episodes[0].episode_id == unrelated_bridge.episode_id
+        assert episodes[0].reasoning_coverage() == 0.0
+
+    def test_episode_id_preserved(self, sample_bridge_episode):
+        """Episode ID must be kept exactly as-is (absolute path if Bridge v2 gives one)."""
+        original_id = "bridge_data_v2/env/task/ep/split/out.npy"
+        bridge_ep = BridgeEpisode(episode_id=original_id)
+        cfg = self._make_config()
+        interleaver = EpisodeInterleaver(
+            cfg,
+            MockECoTReader([]),
+            MockBridgeReader([bridge_ep]),
+        )
+        episodes = list(interleaver.iter_all_episodes())
+        assert episodes[0].episode_id == original_id
+
+    def test_all_bridge_episodes_yielded(
+        self, sample_ecot_episode, sample_bridge_episode
+    ):
+        """Every Bridge v2 episode appears in the output regardless of ECoT match."""
+        unrelated = BridgeEpisode(episode_id="bridge_data_v2/other/out.npy")
+        cfg = self._make_config()
+        interleaver = EpisodeInterleaver(
+            cfg,
+            MockECoTReader([sample_ecot_episode]),
+            MockBridgeReader([sample_bridge_episode, unrelated]),
+        )
+        episodes = list(interleaver.iter_all_episodes())
+        assert len(episodes) == 2
+
+
+# ---------------------------------------------------------------------------
+# RLDS helpers (no TensorFlow required)
+# ---------------------------------------------------------------------------
+
+
+class TestRLDSHelpers:
+    def test_has_reasoning_true(self, sample_interleaved_episode):
+        from vla_curator.curation.rlds_export import _has_reasoning
+        assert _has_reasoning(sample_interleaved_episode)
+
+    def test_has_reasoning_false_when_no_traces(self):
+        from vla_curator.curation.rlds_export import _has_reasoning
+        from vla_curator.schemas.interleaved import InterleavedEpisode, AlignedStep
+        ep = InterleavedEpisode(
+            episode_id="test",
+            steps=[AlignedStep(step_index=0, reasoning=None)],
+        )
+        assert not _has_reasoning(ep)
+
+    def test_pad7_pads_short(self):
+        from vla_curator.curation.rlds_export import _pad7
+        arr = np.array([1.0, 2.0, 3.0])
+        out = _pad7(arr)
+        assert out.shape == (7,)
+        assert out[2] == pytest.approx(3.0)
+        assert out[3] == pytest.approx(0.0)
+
+    def test_pad7_truncates_long(self):
+        from vla_curator.curation.rlds_export import _pad7
+        arr = np.arange(10, dtype=np.float32)
+        out = _pad7(arr)
+        assert out.shape == (7,)
+
+    def test_ensure_image_returns_blank_for_none(self):
+        from vla_curator.curation.rlds_export import _ensure_image
+        img = _ensure_image(None)
+        assert img.shape == (480, 640, 3)
+        assert img.dtype == np.uint8
+
+    def test_ensure_image_resizes(self):
+        from vla_curator.curation.rlds_export import _ensure_image
+        small = np.zeros((64, 64, 3), dtype=np.uint8)
+        out = _ensure_image(small)
+        assert out.shape == (480, 640, 3)
+
+
+# ---------------------------------------------------------------------------
 # Validator
 # ---------------------------------------------------------------------------
 
