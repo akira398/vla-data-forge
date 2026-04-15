@@ -52,10 +52,17 @@ _DEFAULT_SAVE_DIR = Path("outputs/viz/ecot")
 
 @app.command()
 def main(
+    local_path: Path = typer.Option(
+        None,
+        "--local-path",
+        "-p",
+        help="Path to a locally downloaded copy of the dataset. "
+             "When set, the HF Hub is not contacted.",
+    ),
     hf_repo: str = typer.Option(
         "Embodied-CoT/embodied_features_bridge",
         "--repo",
-        help="HuggingFace dataset repo.",
+        help="HuggingFace dataset repo (ignored when --local-path is set).",
     ),
     split: str = typer.Option("train", "--split", help="Dataset split."),
     max_episodes: int = typer.Option(5, "--max-episodes", "-n", help="Episodes to load."),
@@ -86,12 +93,14 @@ def main(
     h, w = [int(x) for x in image_size.split("x")]
     cfg = ECoTDatasetConfig(
         hf_repo=hf_repo,
+        local_path=local_path,
         split=split,
         max_episodes=max_episodes,
         image_size=(h, w),
     )
 
-    console.print(f"[bold]Loading[/bold] {hf_repo} (split={split}, max={max_episodes})…")
+    source_label = str(local_path) if local_path else hf_repo
+    console.print(f"[bold]Loading[/bold] {source_label} (split={split}, max={max_episodes})…")
     reader = ECoTDatasetReader(cfg)
     episodes = reader.take(max_episodes)
 

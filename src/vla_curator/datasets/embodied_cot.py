@@ -266,7 +266,7 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
     # ------------------------------------------------------------------
 
     def _load_hf_dataset(self) -> Any:
-        """Load the HuggingFace dataset (downloads if not cached)."""
+        """Load the dataset — from local disk if local_path is set, else HF Hub."""
         try:
             import datasets as hf_datasets
         except ImportError as e:
@@ -274,6 +274,9 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
                 "The 'datasets' package is required to load ECoT data. "
                 "Install it with: pip install datasets"
             ) from e
+
+        if self.config.local_path is not None:
+            return self._load_from_local(hf_datasets)
 
         logger.info(
             "Loading HF dataset %s (split=%s)…",
@@ -286,6 +289,51 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
             cache_dir=str(self.config.cache_dir) if self.config.cache_dir else None,
         )
         logger.info("Loaded %d rows from %s.", len(ds), self.config.hf_repo)
+        return ds
+
+    def _load_from_local(self, hf_datasets: Any) -> Any:
+        """
+        Load from a locally downloaded dataset directory.
+
+        Tries ``load_from_disk`` first (handles datasets saved with
+        ``dataset.save_to_disk()``), then falls back to ``load_dataset``
+        for raw Parquet/Arrow directories.
+        """
+        path = self.config.local_path
+        if not path.exists():
+            raise FileNotFoundError(
+                f"ECoT local_path does not exist: {path}"
+            )
+
+        logger.info("Loading ECoT dataset from local path: %s", path)
+
+        # Strategy 1: save_to_disk format (dataset_info.json or dataset_dict.json)
+        try:
+            ds = hf_datasets.load_from_disk(str(path))
+            # DatasetDict → extract the requested split
+            if hasattr(ds, "column_names") and isinstance(ds.column_names, dict):
+                # It's a DatasetDict
+                split = self.config.split
+                if split in ds:
+                    ds = ds[split]
+                else:
+                    first = next(iter(ds))
+                    logger.warning(
+                        "Split '%s' not found in local dataset; using '%s' instead.",
+                        split, first,
+                    )
+                    ds = ds[first]
+            logger.info("Loaded %d rows from disk (load_from_disk).", len(ds))
+            return ds
+        except Exception as e:
+            logger.debug("load_from_disk failed (%s); trying load_dataset…", e)
+
+        # Strategy 2: raw Parquet/Arrow directory
+        ds = hf_datasets.load_dataset(
+            str(path),
+            split=self.config.split,
+        )
+        logger.info("Loaded %d rows from disk (load_dataset).", len(ds))
         return ds
 
     @property

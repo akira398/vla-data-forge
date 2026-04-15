@@ -1,6 +1,23 @@
 # Embodied-CoT / embodied_features_bridge dataset config
+#
+# Local download (recommended for servers)
+# -----------------------------------------
+# Download the dataset once with the HuggingFace CLI:
+#
+#   huggingface-cli download Embodied-CoT/embodied_features_bridge \
+#       --repo-type dataset --local-dir /datasets/embodied_features_bridge
+#
+# Then set local_path below and the reader will never contact the HF Hub:
+#
+#   local_path: /datasets/embodied_features_bridge
+#
+# The reader accepts two on-disk layouts:
+#   1. Saved with dataset.save_to_disk()  → contains dataset_info.json
+#   2. Raw Parquet / Arrow files          → downloaded with huggingface-cli
+
 name: embodied_features_bridge
 hf_repo: Embodied-CoT/embodied_features_bridge
+local_path: null          # SET THIS to your local download path, or leave null to stream from HF Hub
 split: train
 max_episodes: null        # null = load all; set an integer for quick experiments
 shuffle: false

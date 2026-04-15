@@ -3,6 +3,8 @@
 ecot:
   name: embodied_features_bridge
   hf_repo: Embodied-CoT/embodied_features_bridge
+  local_path: null        # SET THIS: path to local download, e.g. /datasets/embodied_features_bridge
+                          # Leave null to stream from HF Hub
   split: train
   max_episodes: null
   image_size: [256, 256]

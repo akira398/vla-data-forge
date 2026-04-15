@@ -48,11 +48,36 @@ class DatasetConfig(BaseModel):
 
 
 class ECoTDatasetConfig(DatasetConfig):
-    """Config for the Embodied-CoT / embodied_features_bridge HF dataset."""
+    """
+    Config for the Embodied-CoT / embodied_features_bridge HF dataset.
+
+    Local loading
+    -------------
+    If you have already downloaded the dataset (e.g. via
+    ``huggingface-cli download`` or ``dataset.save_to_disk()``), set
+    ``local_path`` to the directory and the reader will load from disk
+    without any network access.
+
+    The reader tries the following strategies in order:
+      1. ``datasets.load_from_disk(local_path)``   — for save_to_disk format
+      2. ``datasets.load_dataset(local_path)``      — for raw parquet/arrow dirs
+    """
 
     name: str = "embodied_features_bridge"
     hf_repo: str = "Embodied-CoT/embodied_features_bridge"
-    """HuggingFace Hub dataset repository."""
+    """HuggingFace Hub dataset repository (used only when local_path is None)."""
+    local_path: Optional[Path] = None
+    """
+    Path to a locally downloaded copy of the dataset.
+    When set, the HF Hub is never contacted.
+
+    Accepted layouts
+    ----------------
+    - A directory produced by ``dataset.save_to_disk()``
+      (contains ``dataset_info.json`` / ``dataset_dict.json``).
+    - A directory of Parquet / Arrow files produced by
+      ``huggingface-cli download --repo-type dataset``.
+    """
     reasoning_columns: list[str] = Field(
         default=[
             "task_reasoning",
