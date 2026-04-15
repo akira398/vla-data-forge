@@ -222,25 +222,33 @@ Default episode cap: `--max-episodes 5`. Default frame cap: `--max-frames 16`.
 
 ### 4. Curate interleaved dataset
 
-Merges ECoT reasoning annotations with Bridge v2 observations and actions:
+Merges ECoT reasoning annotations with Bridge v2 observations and actions.
+The default output format is **RLDS** (Bridge v2 compatible TFRecord files).
 
 ```bash
 python scripts/curate_interleaved.py \
     --bridge-path /datasets/bridge_orig \
-    --alignment nearest
+    --ecot-path /datasets/embodied_features_bridge
 
 # Quick test with 100 episodes:
 python scripts/curate_interleaved.py \
     --bridge-path /datasets/bridge_orig \
-    --max-episodes 100 --alignment nearest
+    --ecot-path /datasets/embodied_features_bridge \
+    --max-episodes 100
+
+# Legacy JSONL output (only matched episodes):
+python scripts/curate_interleaved.py \
+    --bridge-path /datasets/bridge_orig \
+    --ecot-path /datasets/embodied_features_bridge \
+    --format jsonl
 ```
 
-Alignment strategies:
+Alignment strategies (used for ECoT → Bridge v2 step matching):
 
 | Strategy | Description |
 |----------|-------------|
-| `nearest` | Each Bridge step gets reasoning from the closest annotated step (default) |
-| `exact` | Only steps with a direct annotation keep reasoning; others are dropped |
+| `nearest` | Each Bridge step gets reasoning from the closest annotated ECoT step (default) |
+| `exact` | Only steps with a direct annotation keep reasoning; others get empty strings |
 | `broadcast` | Copy a single episode-level trace to every step |
 
 ### 5. Validate output
@@ -253,40 +261,80 @@ python scripts/validate_dataset.py outputs/curated/episodes.jsonl \
 
 ---
 
-## Output Format (JSONL)
+## Output Format (RLDS / TFDS TFRecords)
 
-Each line in `outputs/curated/episodes.jsonl`:
+The default output is two TFDS-compatible datasets written under `outputs/curated/`:
 
-```json
-{
-  "schema_version": "1.0",
-  "episode_id": "bridge_v2/...",
-  "task_description": "pick up the orange",
-  "alignment_metadata": {
-    "strategy": "nearest",
-    "num_steps_bridge": 45,
-    "reasoning_coverage": 1.0
-  },
-  "steps": [
-    {
-      "step_index": 0,
-      "action": [0.01, -0.02, 0.0, 0.0, 0.0, 0.0, 0.0],
-      "alignment_confidence": 1.0,
-      "observation": { "image_path": "images/bridge_v2_.../step_00000.png" },
-      "reasoning": {
-        "task_reasoning": "Pick up the orange from the table.",
-        "subtask_reasoning": "Move the arm above the orange.",
-        "move_reasoning": "...",
-        "gripper_reasoning": "...",
-        "attribute_reasoning": "...",
-        "spatial_reasoning": "..."
-      }
-    }
-  ]
-}
+```
+outputs/curated/
+  vla_curated_dataset/
+    full/1.0.0/
+      dataset_info.json
+      features.json
+      vla_curated_dataset-train.tfrecord-00000-of-NNNNN
+      ...
+    reasoning_only/1.0.0/
+      dataset_info.json
+      features.json
+      vla_curated_dataset-train.tfrecord-00000-of-NNNNN
+      ...
 ```
 
-`alignment_confidence`: `1.0` = directly annotated step, `0.7` = propagated from nearest.
+| Variant | Contents |
+|---------|----------|
+| `full` | All Bridge v2 episodes. Episodes without an ECoT match have empty reasoning strings. |
+| `reasoning_only` | Only episodes that have at least one ECoT reasoning annotation. |
+
+### Feature spec (Bridge v2 compatible)
+
+Field names and types match Bridge v2 exactly. Reasoning fields are added
+inside `observation` so existing loaders that don't know about them will
+silently ignore them.
+
+```
+episode_metadata/file_path           bytes   original Bridge v2 path (unchanged)
+
+steps/observation/image_0            uint8   (480, 640, 3)  primary camera, JPEG
+steps/observation/image_1            uint8   (480, 640, 3)  wrist camera, JPEG
+steps/observation/state              float32 (7,)           EEF position + gripper
+steps/observation/language_instruction  bytes
+steps/observation/task_reasoning     bytes   empty string if no ECoT match
+steps/observation/subtask_reasoning  bytes
+steps/observation/move_reasoning     bytes
+
+steps/action                         float32 (7,)           EEF delta + gripper cmd
+steps/is_first                       bool
+steps/is_last                        bool
+steps/is_terminal                    bool
+steps/reward                         float32
+steps/discount                       float32
+steps/alignment_confidence           float32  1.0=direct, 0.7=propagated, 0.0=none
+```
+
+### Loading
+
+```python
+import tensorflow_datasets as tfds
+
+# All Bridge v2 episodes (empty reasoning for unmatched):
+ds_full = tfds.builder_from_directory(
+    "outputs/curated/vla_curated_dataset/full/1.0.0/"
+).as_dataset(split="train")
+
+# Only episodes with reasoning:
+ds_reasoning = tfds.builder_from_directory(
+    "outputs/curated/vla_curated_dataset/reasoning_only/1.0.0/"
+).as_dataset(split="train")
+
+for episode in ds_full:
+    for step in episode["steps"]:
+        image   = step["observation"]["image_0"]        # (480, 640, 3) uint8
+        action  = step["action"]                        # (7,) float32
+        task_r  = step["observation"]["task_reasoning"] # bytes
+        conf    = step["alignment_confidence"]          # float32
+```
+
+`alignment_confidence`: `1.0` = directly annotated step, `0.7` = propagated from nearest, `0.0` = no ECoT match.
 
 ---
 
@@ -294,9 +342,11 @@ Each line in `outputs/curated/episodes.jsonl`:
 
 ```python
 from pathlib import Path
-from vla_curator.config import ECoTDatasetConfig, BridgeV2DatasetConfig
+from vla_curator.config import ECoTDatasetConfig, BridgeV2DatasetConfig, CurationConfig
 from vla_curator.datasets.embodied_cot import ECoTDatasetReader
 from vla_curator.datasets.bridge_v2 import BridgeV2DatasetReader
+from vla_curator.curation.interleaver import EpisodeInterleaver
+from vla_curator.curation.export import ExportFormat, create_exporter
 from vla_curator.visualization import BridgeViewer
 
 # Load ECoT reasoning annotations
@@ -306,7 +356,8 @@ ecot_cfg = ECoTDatasetConfig(
 )
 for ep in ECoTDatasetReader(ecot_cfg):
     print(ep.episode_id)
-    print(ep.steps[0].reasoning.task_reasoning)
+    annotated = [s for s in ep.steps if s.reasoning is not None]
+    print(f"{len(annotated)}/{len(ep.steps)} steps annotated")
 
 # Load Bridge v2 episodes
 bridge_cfg = BridgeV2DatasetConfig(
@@ -317,6 +368,23 @@ bridge_cfg = BridgeV2DatasetConfig(
 viewer = BridgeViewer()
 for ep in BridgeV2DatasetReader(bridge_cfg):
     viewer.show_summary(ep, save_path=f"outputs/{ep.episode_id}.png")
+
+# Curate and write RLDS datasets
+cfg = CurationConfig(
+    ecot=ECoTDatasetConfig(local_path=Path("/datasets/embodied_features_bridge")),
+    bridge=BridgeV2DatasetConfig(source="tfds", local_path=Path("/datasets/bridge_orig")),
+    alignment_strategy="nearest",
+    output_dir=Path("outputs/curated"),
+)
+interleaver = EpisodeInterleaver(cfg, ECoTDatasetReader(cfg.ecot), BridgeV2DatasetReader(cfg.bridge))
+exporter = create_exporter(ExportFormat.RLDS, cfg.output_dir)
+
+for ep in interleaver.iter_all_episodes():   # all Bridge v2 eps, empty reasoning if no ECoT match
+    exporter.export_episode(ep)
+
+exporter.write_metadata({"alignment_strategy": "nearest"})
+# → outputs/curated/vla_curated_dataset/full/1.0.0/
+# → outputs/curated/vla_curated_dataset/reasoning_only/1.0.0/
 ```
 
 ---
