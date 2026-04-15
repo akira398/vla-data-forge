@@ -1,41 +1,36 @@
 """
 Embodied-CoT dataset reader.
 
-Loads the ``Embodied-CoT/embodied_features_bridge`` HuggingFace dataset and
-converts it to ``ECoTEpisode`` objects.
+Loads ``Embodied-CoT/embodied_features_bridge``.
 
-Dataset assumptions
--------------------
-The HF dataset is RLDS-style: each row in the Arrow table represents one
-*episode*, and each episode has a ``steps`` column that is a sequence of dicts.
+Dataset structure (local download)
+------------------------------------
+A single JSON file ``embodied_features_bridge.json`` (~1.4 GB).
+Top-level is a dict keyed by episode file paths:
 
-Expected step-level columns (best-effort detection, see ``COLUMN_MAP``):
-  observation/image_0             bytes or uint8 array  (H, W, 3)
-  action                          float32 (7,)
-  language_instruction            str
-  reasoning/task_reasoning        str   (may be missing for raw episodes)
-  reasoning/subtask_reasoning     str
-  reasoning/move_reasoning        str
-  reasoning/gripper_reasoning     str
-  reasoning/attribute_reasoning   str
-  reasoning/spatial_reasoning     str
-  is_first / is_last              bool
+    {
+      "/path/to/bridge_data/.../out.npy": {
+          "task_reasoning":      "...",
+          "subtask_reasoning":   "...",
+          "move_reasoning":      "...",
+          "gripper_reasoning":   "...",
+          "attribute_reasoning": "...",
+          "spatial_reasoning":   "..."
+      },
+      ...
+    }
 
-If the real column structure differs, update ``COLUMN_MAP`` below — the rest
-of the reader is column-name-agnostic.
-
-HuggingFace datasets uses Apache Arrow under the hood and may return images as:
-  - numpy uint8 arrays          (most common)
-  - PIL Image objects           (when decode=True and PIL installed)
-  - bytes / encoded JPEG/PNG    (when decode=False)
-We handle all three cases in ``_decode_image``.
+Each key is the episode ID (matches Bridge v2 source paths).
+Images are NOT stored here — they live in the Bridge v2 .npy / TFRecord files.
+The ECoT dataset provides only the reasoning annotations.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Optional
 
 import numpy as np
 
@@ -50,419 +45,244 @@ from .base import DatasetReader
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Column name mapping
-# ---------------------------------------------------------------------------
-
-# Maps internal field names → possible HF column paths (checked in order).
-# Paths use "/" to represent nested dicts: "observation/image_0" means
-# step["observation"]["image_0"].
-COLUMN_MAP: Dict[str, List[str]] = {
-    "image":               ["observation/image_0", "image_0", "image"],
-    "action":              ["action"],
-    "instruction":         ["language_instruction", "instruction", "task"],
-    "task_reasoning":      ["reasoning/task_reasoning", "task_reasoning"],
-    "subtask_reasoning":   ["reasoning/subtask_reasoning", "subtask_reasoning"],
-    "move_reasoning":      ["reasoning/move_reasoning", "move_reasoning"],
-    "gripper_reasoning":   ["reasoning/gripper_reasoning", "gripper_reasoning"],
-    "attribute_reasoning": ["reasoning/attribute_reasoning", "attribute_reasoning"],
-    "spatial_reasoning":   ["reasoning/spatial_reasoning", "spatial_reasoning"],
-    "is_first":            ["is_first"],
-    "is_last":             ["is_last"],
-}
+# Reasoning field names expected in the JSON values
+_REASONING_FIELDS = [
+    "task_reasoning",
+    "subtask_reasoning",
+    "move_reasoning",
+    "gripper_reasoning",
+    "attribute_reasoning",
+    "spatial_reasoning",
+]
 
 
-def _resolve(step: Dict[str, Any], candidates: List[str]) -> Any:
+def _parse_entry(episode_id: str, value: Any, ep_index: int) -> ECoTEpisode:
     """
-    Try each candidate path against a step dict, returning the first match.
-    Supports nested paths with "/" separator.  Returns None if nothing matches.
+    Parse one key-value pair from embodied_features_bridge.json into an ECoTEpisode.
+
+    The value may be:
+      - a dict with reasoning fields  (standard case)
+      - a list of per-step dicts      (step-level annotations)
+      - something else                (stored as raw metadata)
     """
-    for path in candidates:
-        parts = path.split("/")
-        val = step
-        for part in parts:
-            if isinstance(val, dict) and part in val:
-                val = val[part]
-            else:
-                val = None
-                break
-        if val is not None:
-            return val
-    return None
-
-
-def _decode_image(raw: Any) -> Optional[np.ndarray]:
-    """Convert HF image representations to uint8 numpy arrays."""
-    if raw is None:
-        return None
-    if isinstance(raw, np.ndarray):
-        return raw.astype(np.uint8)
-    # PIL Image
-    try:
-        from PIL import Image as PILImage
-        if isinstance(raw, PILImage.Image):
-            return np.array(raw.convert("RGB"), dtype=np.uint8)
-    except ImportError:
-        pass
-    # Bytes / encoded image
-    if isinstance(raw, (bytes, bytearray)):
-        import io
-        from PIL import Image as PILImage
-        return np.array(PILImage.open(io.BytesIO(raw)).convert("RGB"), dtype=np.uint8)
-    # Dict with "bytes" key (HF datasets Image feature)
-    if isinstance(raw, dict) and "bytes" in raw and raw["bytes"]:
-        import io
-        from PIL import Image as PILImage
-        return np.array(
-            PILImage.open(io.BytesIO(raw["bytes"])).convert("RGB"), dtype=np.uint8
-        )
-    logger.debug("Could not decode image of type %s", type(raw))
-    return None
-
-
-def _parse_step(
-    step: Dict[str, Any],
-    step_index: int,
-    image_size: Optional[tuple[int, int]],
-) -> ECoTStep:
-    """Parse a single HF step dict into an ECoTStep."""
-    # Image
-    raw_image = _resolve(step, COLUMN_MAP["image"])
-    image = _decode_image(raw_image)
-    if image is not None and image_size is not None:
-        from PIL import Image as PILImage
-        pil = PILImage.fromarray(image)
-        pil = pil.resize((image_size[1], image_size[0]), PILImage.BILINEAR)
-        image = np.array(pil)
-
-    obs = ECoTObservation(step_index=step_index, image=image)
-
-    # Action
-    raw_action = _resolve(step, COLUMN_MAP["action"])
-    if raw_action is not None:
-        action = np.asarray(raw_action, dtype=np.float32).flatten()
-    else:
-        action = np.zeros(7, dtype=np.float32)
-        logger.warning("Step %d has no action — defaulting to zeros.", step_index)
-
-    # Reasoning
-    task_r      = _resolve(step, COLUMN_MAP["task_reasoning"])
-    subtask_r   = _resolve(step, COLUMN_MAP["subtask_reasoning"])
-    move_r      = _resolve(step, COLUMN_MAP["move_reasoning"])
-    gripper_r   = _resolve(step, COLUMN_MAP["gripper_reasoning"])
-    attribute_r = _resolve(step, COLUMN_MAP["attribute_reasoning"])
-    spatial_r   = _resolve(step, COLUMN_MAP["spatial_reasoning"])
-
-    reasoning: Optional[ReasoningTrace] = None
-    if any([task_r, subtask_r, move_r, gripper_r, attribute_r, spatial_r]):
+    if isinstance(value, dict):
+        # Episode-level reasoning — create a single representative step
         reasoning = ReasoningTrace(
-            task_reasoning=task_r,
-            subtask_reasoning=subtask_r,
-            move_reasoning=move_r,
-            gripper_reasoning=gripper_r,
-            attribute_reasoning=attribute_r,
-            spatial_reasoning=spatial_r,
+            task_reasoning=value.get("task_reasoning") or "",
+            subtask_reasoning=value.get("subtask_reasoning") or "",
+            move_reasoning=value.get("move_reasoning") or "",
+            gripper_reasoning=value.get("gripper_reasoning") or "",
+            attribute_reasoning=value.get("attribute_reasoning") or "",
+            spatial_reasoning=value.get("spatial_reasoning") or "",
         )
+        # Try to find a language instruction
+        instruction = (
+            value.get("language_instruction")
+            or value.get("task")
+            or value.get("task_reasoning")  # fallback: use task reasoning as description
+            or ""
+        )
+        step = ECoTStep(
+            step_index=0,
+            observation=ECoTObservation(step_index=0, image=None),
+            action=np.zeros(7, dtype=np.float32),
+            reasoning=reasoning,
+            is_first=True,
+            is_last=True,
+        )
+        steps = [step]
 
-    is_first = bool(_resolve(step, COLUMN_MAP["is_first"]) or (step_index == 0))
-    is_last  = bool(_resolve(step, COLUMN_MAP["is_last"]) or False)
+    elif isinstance(value, list):
+        # Step-level annotations
+        instruction = ""
+        steps = []
+        for i, item in enumerate(value):
+            if not isinstance(item, dict):
+                continue
+            if not instruction:
+                instruction = item.get("language_instruction") or item.get("task") or ""
+            reasoning = ReasoningTrace(
+                task_reasoning=item.get("task_reasoning") or "",
+                subtask_reasoning=item.get("subtask_reasoning") or "",
+                move_reasoning=item.get("move_reasoning") or "",
+                gripper_reasoning=item.get("gripper_reasoning") or "",
+                attribute_reasoning=item.get("attribute_reasoning") or "",
+                spatial_reasoning=item.get("spatial_reasoning") or "",
+            )
+            steps.append(ECoTStep(
+                step_index=i,
+                observation=ECoTObservation(step_index=i, image=None),
+                action=np.zeros(7, dtype=np.float32),
+                reasoning=reasoning,
+                is_first=(i == 0),
+                is_last=(i == len(value) - 1),
+            ))
+        if not steps:
+            steps = [ECoTStep(
+                step_index=0,
+                observation=ECoTObservation(step_index=0, image=None),
+                action=np.zeros(7, dtype=np.float32),
+                reasoning=None,
+                is_first=True,
+                is_last=True,
+            )]
 
-    return ECoTStep(
-        step_index=step_index,
-        observation=obs,
-        action=action,
-        reasoning=reasoning,
-        is_first=is_first,
-        is_last=is_last,
-    )
-
-
-def _parse_episode(
-    row: Dict[str, Any],
-    episode_index: int,
-    image_size: Optional[tuple[int, int]],
-) -> ECoTEpisode:
-    """Parse a HF dataset row into an ECoTEpisode."""
-    # Episode ID
-    episode_id = str(
-        row.get("episode_id")
-        or row.get("episode_metadata", {}).get("file_path", f"ep_{episode_index:06d}")
-        or f"ep_{episode_index:06d}"
-    )
-
-    # Steps — handle both flat and nested formats
-    raw_steps = row.get("steps", [])
-    if not raw_steps:
-        # Some versions store steps as top-level lists
-        raw_steps = row.get("trajectory", [])
-
-    steps: List[ECoTStep] = []
-
-    # Language instruction — try to get from first step or episode metadata
-    instruction = (
-        row.get("language_instruction")
-        or row.get("task", "")
-    )
-
-    for i, raw_step in enumerate(raw_steps):
-        step = _parse_step(raw_step, step_index=i, image_size=image_size)
-        # Instruction from step if not at episode level
-        if not instruction:
-            instruction = str(_resolve(raw_step, COLUMN_MAP["instruction"]) or "")
-        steps.append(step)
-
-    if steps:
-        steps[0].is_first = True
-        steps[-1].is_last = True
-
-    metadata: Dict[str, Any] = {}
-    if "episode_metadata" in row:
-        metadata["episode_metadata"] = row["episode_metadata"]
+    else:
+        # Unknown format — make a placeholder episode
+        instruction = ""
+        steps = [ECoTStep(
+            step_index=0,
+            observation=ECoTObservation(step_index=0, image=None),
+            action=np.zeros(7, dtype=np.float32),
+            reasoning=None,
+            is_first=True,
+            is_last=True,
+        )]
 
     return ECoTEpisode(
         episode_id=episode_id,
         language_instruction=instruction,
         steps=steps,
-        metadata=metadata,
+        metadata={"source_path": episode_id},
         source_dataset="embodied_features_bridge",
     )
 
 
-# ---------------------------------------------------------------------------
-# Reader class
-# ---------------------------------------------------------------------------
-
-
 class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
     """
-    Reader for the Embodied-CoT / embodied_features_bridge HF dataset.
+    Reader for the Embodied-CoT / embodied_features_bridge dataset.
 
-    Parameters
-    ----------
-    config : ECoTDatasetConfig
-        Dataset configuration (split, max_episodes, image_size, etc.)
+    Local usage (recommended)
+    -------------------------
+    Download once:
+        huggingface-cli download Embodied-CoT/embodied_features_bridge \\
+            --repo-type dataset --local-dir /datasets/embodied_features_bridge
 
-    Usage
-    -----
-    from vla_curator.datasets import ECoTDatasetReader
-    from vla_curator.config import ECoTDatasetConfig
-
-    cfg = ECoTDatasetConfig(split="train", max_episodes=10)
-    reader = ECoTDatasetReader(cfg)
-    for episode in reader:
-        print(episode)
+    Then:
+        cfg = ECoTDatasetConfig(local_path=Path("/datasets/embodied_features_bridge"))
+        reader = ECoTDatasetReader(cfg)
+        for ep in reader:
+            print(ep.episode_id, ep.language_instruction)
     """
 
     dataset_name = "embodied_features_bridge"
 
     def __init__(self, config: ECoTDatasetConfig) -> None:
         self.config = config
-        self._hf_dataset: Any = None   # lazy-loaded
-        self._ids: Optional[List[str]] = None
 
     # ------------------------------------------------------------------
-    # Lazy loading
+    # Core iteration
     # ------------------------------------------------------------------
 
-    def _load_hf_dataset(self) -> Any:
-        """Load the dataset — from local disk if local_path is set, else HF Hub."""
+    def __iter__(self) -> Iterator[ECoTEpisode]:
+        if self.config.local_path is not None:
+            yield from self._iter_local()
+        else:
+            yield from self._iter_hf()
+
+    def _iter_local(self) -> Iterator[ECoTEpisode]:
+        """Load from local JSON file(s)."""
+        path = self.config.local_path
+        if not path.exists():
+            raise FileNotFoundError(f"local_path does not exist: {path}")
+
+        # Find JSON files, skip metadata
+        json_files = sorted(
+            f for f in path.rglob("*.json")
+            if not f.name.startswith(".")
+            and f.name not in ("dataset_info.json", "dataset_dict.json")
+        )
+        if not path.is_dir():
+            # local_path might point directly to the json file
+            json_files = [path] if path.suffix == ".json" else []
+
+        if not json_files:
+            raise FileNotFoundError(
+                f"No .json files found under {path}\n"
+                f"Contents: {[f.name for f in path.iterdir()]}"
+            )
+
+        limit = self.config.max_episodes
+        count = 0
+
+        for json_file in json_files:
+            if limit is not None and count >= limit:
+                break
+
+            size_mb = json_file.stat().st_size / 1e6
+            logger.info("Loading %s (%.0f MB) — this may take a moment…", json_file.name, size_mb)
+
+            with open(json_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            logger.info("Loaded %d entries from %s", len(data), json_file.name)
+
+            # Handle both dict {path: {...}} and list [{...}, ...] top-level formats
+            if isinstance(data, dict):
+                items = data.items()
+            elif isinstance(data, list):
+                items = ((str(i), row) for i, row in enumerate(data))
+            else:
+                raise ValueError(f"Unexpected JSON top-level type: {type(data)}")
+
+            for ep_index, (key, value) in enumerate(items):
+                if limit is not None and count >= limit:
+                    break
+                episode = _parse_entry(key, value, ep_index)
+                if self.config.require_reasoning and not episode.has_any_reasoning():
+                    continue
+                yield episode
+                count += 1
+
+    def _iter_hf(self) -> Iterator[ECoTEpisode]:
+        """Stream from HuggingFace Hub."""
         try:
             import datasets as hf_datasets
         except ImportError as e:
-            raise ImportError(
-                "The 'datasets' package is required to load ECoT data. "
-                "Install it with: pip install datasets"
-            ) from e
+            raise ImportError("pip install datasets") from e
 
-        if self.config.local_path is not None:
-            return self._load_from_local(hf_datasets)
-
-        logger.info(
-            "Streaming HF dataset %s (split=%s)…",
-            self.config.hf_repo,
-            self.config.split,
-        )
+        logger.info("Streaming %s from HF Hub…", self.config.hf_repo)
         ds = hf_datasets.load_dataset(
             self.config.hf_repo,
             split=self.config.split,
             streaming=True,
             cache_dir=str(self.config.cache_dir) if self.config.cache_dir else None,
         )
-        return ds
 
-    def _load_from_local(self, hf_datasets: Any) -> Any:
-        """
-        Load from a locally downloaded dataset directory.
-
-        Loading strategy (in order):
-          1. ``load_from_disk``   — for datasets saved with dataset.save_to_disk()
-                                    (Arrow memory-map, instant open)
-          2. direct parquet       — for huggingface-cli download layout
-                                    (load_dataset("parquet", data_files=..., streaming=True))
-                                    Bypasses all auto-detection and network checks.
-        """
-        path = self.config.local_path
-        if not path.exists():
-            raise FileNotFoundError(f"ECoT local_path does not exist: {path}")
-
-        logger.info("Loading ECoT dataset from local path: %s", path)
-
-        # Strategy 1: save_to_disk format — fast memory-mapped Arrow
-        if (path / "dataset_info.json").exists() or (path / "dataset_dict.json").exists():
-            try:
-                ds = hf_datasets.load_from_disk(str(path))
-                if hasattr(ds, "keys"):  # DatasetDict → pick split
-                    split = self.config.split
-                    if split in ds:
-                        ds = ds[split]
-                    else:
-                        first = next(iter(ds))
-                        logger.warning("Split '%s' not found; using '%s'.", split, first)
-                        ds = ds[first]
-                logger.info("Opened dataset via load_from_disk (Arrow).")
-                return ds
-            except Exception as e:
-                logger.debug("load_from_disk failed (%s); trying parquet…", e)
-
-        # Strategy 2: raw parquet files (huggingface-cli download layout).
-        # Use load_dataset("parquet", data_files=...) — purely local, no network,
-        # no auto-detection overhead.  Returns an IterableDataset immediately.
-        parquet_files = sorted(path.rglob("*.parquet"))
-        if not parquet_files:
-            parquet_files = sorted(path.rglob("*.arrow"))
-        if not parquet_files:
-            raise FileNotFoundError(
-                f"No parquet or arrow files found under {path}. "
-                "Check that the download completed successfully."
-            )
-
-        # Filter to the requested split subdirectory if one exists
-        split = self.config.split
-        split_files = [f for f in parquet_files if split in f.parts]
-        if split_files:
-            parquet_files = split_files
-            logger.info("Found %d parquet files for split '%s'.", len(parquet_files), split)
-        else:
-            logger.info(
-                "No split '%s' subdirectory found; using all %d parquet files.",
-                split, len(parquet_files),
-            )
-
-        ds = hf_datasets.load_dataset(
-            "parquet",
-            data_files={"train": [str(f) for f in parquet_files]},
-            streaming=True,
-            split="train",
-        )
-        logger.info("Streaming from %d local parquet files.", len(parquet_files))
-        return ds
-
-    @property
-    def hf_dataset(self) -> Any:
-        if self._hf_dataset is None:
-            self._hf_dataset = self._load_hf_dataset()
-        return self._hf_dataset
-
-    # ------------------------------------------------------------------
-    # DatasetReader interface
-    # ------------------------------------------------------------------
-
-    def _is_streaming(self) -> bool:
-        """Return True if the underlying dataset is an IterableDataset."""
-        try:
-            import datasets as hf_datasets
-            return isinstance(self.hf_dataset, hf_datasets.IterableDataset)
-        except Exception:
-            return not hasattr(self.hf_dataset, "__len__")
-
-    def __iter__(self) -> Iterator[ECoTEpisode]:
-        ds = self.hf_dataset
         limit = self.config.max_episodes
+        count = 0
+        for idx, row in enumerate(ds):
+            if limit is not None and count >= limit:
+                break
+            # HF Hub version may have a different structure — use key/value if dict-like
+            if "episode_id" in row or "steps" not in row:
+                ep_id = row.get("episode_id") or str(idx)
+                episode = _parse_entry(ep_id, row, idx)
+            else:
+                # Legacy RLDS-style rows with "steps" column
+                episode = _parse_entry(str(idx), row, idx)
+            if self.config.require_reasoning and not episode.has_any_reasoning():
+                continue
+            yield episode
+            count += 1
 
-        if self._is_streaming():
-            # IterableDataset — no len(), no index access, no shuffle support
-            if self.config.shuffle:
-                logger.warning(
-                    "shuffle=True is ignored in streaming mode; "
-                    "use dataset.shuffle() after loading if needed."
-                )
-            count = 0
-            for idx, row in enumerate(ds):
-                if limit is not None and count >= limit:
-                    break
-                episode = _parse_episode(row, idx, self.config.image_size)
-                if self.config.require_reasoning and not episode.has_any_reasoning():
-                    continue
-                yield episode
-                count += 1
-        else:
-            # Regular in-memory Dataset — supports indexing and shuffle
-            indices = list(range(len(ds)))
-            if self.config.shuffle:
-                import random
-                rng = random.Random(self.config.shuffle_seed)
-                rng.shuffle(indices)
-
-            count = 0
-            for idx in indices:
-                if limit is not None and count >= limit:
-                    break
-                row = ds[idx]
-                episode = _parse_episode(row, idx, self.config.image_size)
-                if self.config.require_reasoning and not episode.has_any_reasoning():
-                    continue
-                yield episode
-                count += 1
-
-    def load_episode(self, episode_id: str) -> Optional[ECoTEpisode]:
-        """
-        Load a single episode by ID.
-
-        This performs a linear scan since HF Arrow datasets do not have
-        random access by custom ID.  For large datasets, build an
-        id→index mapping once and cache it.
-        """
-        for i, row in enumerate(self.hf_dataset):
-            ep = _parse_episode(row, i, self.config.image_size)
-            if ep.episode_id == episode_id:
-                return ep
-        return None
-
-    def episode_ids(self) -> List[str]:
-        if self._ids is None:
-            ids = []
-            for i, row in enumerate(self.hf_dataset):
-                ep_id = str(
-                    row.get("episode_id")
-                    or row.get("episode_metadata", {}).get("file_path", f"ep_{i:06d}")
-                    or f"ep_{i:06d}"
-                )
-                ids.append(ep_id)
-            self._ids = ids
-        return self._ids
+    # ------------------------------------------------------------------
+    # Convenience helpers
+    # ------------------------------------------------------------------
 
     def __len__(self) -> int:
-        if self._is_streaming():
-            # IterableDataset has no length; return the cap or a sentinel
-            if self.config.max_episodes is not None:
-                return self.config.max_episodes
-            raise TypeError(
-                "Cannot determine length of a streaming dataset without max_episodes set. "
-                "Set max_episodes in ECoTDatasetConfig or iterate directly."
-            )
-        n = len(self.hf_dataset)
         if self.config.max_episodes is not None:
-            return min(n, self.config.max_episodes)
-        return n
+            return self.config.max_episodes
+        raise TypeError(
+            "Cannot determine length without max_episodes. "
+            "Set max_episodes or iterate directly."
+        )
 
     def info(self) -> Dict[str, Any]:
         base = super().info()
-        base.update(
-            {
-                "hf_repo": self.config.hf_repo,
-                "split": self.config.split,
-                "image_size": self.config.image_size,
-            }
-        )
+        base.update({
+            "hf_repo": self.config.hf_repo,
+            "local_path": str(self.config.local_path) if self.config.local_path else None,
+            "split": self.config.split,
+        })
         return base
