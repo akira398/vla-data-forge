@@ -150,32 +150,28 @@ mv bridge_dataset bridge_orig
 
 ### 2. Inspect Embodied-CoT
 
-Always start with `inspect` to verify your download and see the raw JSON structure:
+Print top-level structure and a summary table of the first N file-path entries:
+
+```bash
+python scripts/visualize_ecot.py \
+    --local-path /datasets/embodied_features_bridge
+```
+
+Show more entries:
 
 ```bash
 python scripts/visualize_ecot.py \
     --local-path /datasets/embodied_features_bridge \
-    --mode inspect
+    --n 20
 ```
 
-Print a summary table of loaded episodes:
+Show all reasoning steps of the first episode (features + annotated steps table):
 
 ```bash
 python scripts/visualize_ecot.py \
     --local-path /datasets/embodied_features_bridge \
-    --mode table --max-episodes 20
+    --steps
 ```
-
-Save reasoning trace figures (one PNG per episode):
-
-```bash
-python scripts/visualize_ecot.py \
-    --local-path /datasets/embodied_features_bridge \
-    --mode reasoning --max-episodes 10 \
-    --save-dir outputs/viz/ecot
-```
-
-Available modes: `inspect` | `table` | `reasoning`
 
 ---
 
