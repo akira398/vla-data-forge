@@ -89,11 +89,20 @@ vla-data-curator/
 
 ## Installation
 
+### 1. Create a conda environment
+
+```bash
+conda create -n vla-forge python=3.11 -y
+conda activate vla-forge
+```
+
+### 2. Clone and install
+
 **Minimum (core + ECoT loading + visualisation):**
 
 ```bash
-git clone https://github.com/your-org/vla-data-curator
-cd vla-data-curator
+git clone https://github.com/akira398/vla-data-forge
+cd vla-data-forge
 pip install -e ".[viz]"
 ```
 
