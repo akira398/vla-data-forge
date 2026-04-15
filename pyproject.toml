@@ -41,7 +41,7 @@ gemini = ["google-generativeai>=0.5"]
 openai = ["openai>=1.20"]
 qwen-api = ["openai>=1.20"]         # Qwen via OpenAI-compatible API
 qwen-local = ["transformers>=4.40", "accelerate>=0.28", "torch>=2.1"]
-bridge = ["tensorflow>=2.14", "tensorflow-datasets>=4.9"]
+bridge = ["tensorflow>=2.14", "tensorflow-datasets>=4.9", "importlib_resources>=6.0"]
 viz = ["imageio>=2.34", "imageio-ffmpeg>=0.4", "seaborn>=0.13"]
 dev = [
     "pytest>=8.0",
