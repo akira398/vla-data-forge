@@ -1,0 +1,17 @@
+# Embodied-CoT / embodied_features_bridge dataset config
+name: embodied_features_bridge
+hf_repo: Embodied-CoT/embodied_features_bridge
+split: train
+max_episodes: null        # null = load all; set an integer for quick experiments
+shuffle: false
+shuffle_seed: 42
+image_size: [256, 256]
+cache_dir: null           # null = use HuggingFace default (~/.cache/huggingface)
+require_reasoning: false  # if true, skip episodes with no reasoning annotations
+reasoning_columns:
+  - task_reasoning
+  - subtask_reasoning
+  - move_reasoning
+  - gripper_reasoning
+  - attribute_reasoning
+  - spatial_reasoning

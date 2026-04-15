@@ -1,0 +1,27 @@
+# Bridge v2 dataset config — OpenVLA download layout
+#
+# After running the OpenVLA download commands:
+#   wget -r -nH --cut-dirs=4 --reject="index.html*" \
+#       https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/
+#   mv bridge_dataset bridge_orig
+#
+# Your directory looks like:
+#   <BASE_DIR>/bridge_orig/1.0.0/dataset_info.json
+#                                 *.tfrecord.gz ...
+#
+# Set local_path to the bridge_orig folder (NOT the parent, NOT the 1.0.0/ dir):
+#   local_path: /path/to/base_dir/bridge_orig
+
+name: bridge_v2
+source: tfds            # tfds (TFDS format, local) | hdf5 | rlds
+local_path: null        # REQUIRED: set to your bridge_orig directory
+split: train            # train | val
+max_episodes: null      # null = load all; integer for quick experiments
+shuffle: false
+shuffle_seed: 42
+image_size: [256, 256]  # (H, W) resize target; null = keep original 480x640
+include_secondary_camera: true
+
+# tfds_name is only used as a fallback when local_path is null.
+# With the OpenVLA bridge_orig layout, local_path is always set.
+tfds_name: bridge_dataset

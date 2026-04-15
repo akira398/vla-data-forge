@@ -1,0 +1,26 @@
+# Interleaved curation config — ECoT + Bridge v2 (OpenVLA layout)
+
+ecot:
+  name: embodied_features_bridge
+  hf_repo: Embodied-CoT/embodied_features_bridge
+  split: train
+  max_episodes: null
+  image_size: [256, 256]
+
+bridge:
+  name: bridge_v2
+  source: tfds
+  local_path: null        # SET THIS: path to your bridge_orig directory
+                          # e.g. /datasets/bridge_orig
+  split: train
+  max_episodes: null
+  image_size: [256, 256]
+  include_secondary_camera: true
+
+alignment_strategy: nearest   # exact | nearest | broadcast
+output_dir: outputs/curated
+export_format: jsonl
+schema_version: "1.0"
+validate_output: true
+save_images: false
+image_output_dir: null        # null = output_dir/images

@@ -1,0 +1,13 @@
+# Google Gemini backend config
+provider: gemini
+model_name: gemini-1.5-pro
+api_key_env_var: GOOGLE_API_KEY
+max_tokens: 2048
+temperature: 0.0
+top_p: 1.0
+max_retries: 5
+retry_base_delay: 1.0
+retry_max_delay: 60.0
+requests_per_minute: 15   # Gemini 1.5 Pro free tier: 2 RPM; paid: 60+ RPM
+timeout: 120.0
+safety_settings: {}

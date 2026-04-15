@@ -1,0 +1,14 @@
+# OpenAI GPT backend config
+provider: openai
+model_name: gpt-4o
+api_key_env_var: OPENAI_API_KEY
+max_tokens: 2048
+temperature: 0.0
+top_p: 1.0
+max_retries: 5
+retry_base_delay: 1.0
+retry_max_delay: 60.0
+requests_per_minute: 60
+timeout: 120.0
+base_url: null            # null = use official OpenAI endpoint
+detail: auto              # image detail: auto | low | high
