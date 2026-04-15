@@ -143,8 +143,7 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -219,8 +218,7 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -285,8 +283,7 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -354,8 +351,7 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -423,8 +419,7 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -533,12 +528,53 @@ class BridgeViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
-    # 7. GIF export (primary camera)
+    # 7. MP4 video export
+    # ------------------------------------------------------------------
+
+    def save_episode_video(
+        self,
+        episode: Any,
+        output_path: Union[str, Path],
+        fps: int = 10,
+        camera: int = 0,
+        max_frames: Optional[int] = 64,
+    ) -> None:
+        """
+        Save the episode as an MP4 video from the specified camera.
+        Requires: pip install imageio imageio-ffmpeg
+        """
+        try:
+            import imageio
+        except ImportError as exc:
+            raise ImportError(
+                "imageio is required for video export. "
+                "pip install 'vla-data-curator[viz]'"
+            ) from exc
+
+        steps = list(episode.steps)
+        if max_frames and len(steps) > max_frames:
+            idxs = np.linspace(0, len(steps) - 1, max_frames, dtype=int)
+            steps = [steps[i] for i in idxs]
+
+        frames = []
+        for step in steps:
+            img = _img(step.observation) if camera == 0 else _img1(step.observation)
+            if img is not None:
+                frames.append(img.astype(np.uint8))
+
+        if not frames:
+            raise ValueError(f"No images found for camera {camera}.")
+
+        with imageio.get_writer(str(output_path), fps=fps) as writer:
+            for frame in frames:
+                writer.append_data(frame)
+
+    # ------------------------------------------------------------------
+    # 8. GIF export (primary camera)
     # ------------------------------------------------------------------
 
     def save_episode_gif(

@@ -145,8 +145,7 @@ class FrameViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
 
         return fig
 
@@ -216,10 +215,46 @@ class FrameViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
 
         return fig
+
+    def save_episode_video(
+        self,
+        episode: Any,
+        output_path: Union[str, Path],
+        fps: int = 10,
+        max_frames: Optional[int] = 64,
+    ) -> None:
+        """
+        Save the episode as an MP4 video.
+        Requires: pip install imageio imageio-ffmpeg
+        """
+        try:
+            import imageio
+        except ImportError as e:
+            raise ImportError(
+                "imageio is required for video export. "
+                "pip install 'vla-data-curator[viz]'"
+            ) from e
+
+        steps = list(episode.steps)
+        if max_frames and len(steps) > max_frames:
+            indices = np.linspace(0, len(steps) - 1, max_frames, dtype=int)
+            steps = [steps[i] for i in indices]
+
+        frames = []
+        for step in steps:
+            img = _load_img(step)
+            if img is not None:
+                frames.append(img.astype(np.uint8))
+
+        if not frames:
+            raise ValueError("No images found in episode for video export.")
+
+        with imageio.get_writer(str(output_path), fps=fps) as writer:
+            for frame in frames:
+                writer.append_data(frame)
 
     def save_episode_gif(
         self,

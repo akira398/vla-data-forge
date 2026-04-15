@@ -69,8 +69,7 @@ class TrajectoryViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -103,8 +102,7 @@ class TrajectoryViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -168,8 +166,7 @@ class TrajectoryViewer:
         plt.tight_layout()
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
 
     # ------------------------------------------------------------------
@@ -246,6 +243,5 @@ class TrajectoryViewer:
 
         if save_path:
             fig.savefig(save_path, dpi=120, bbox_inches="tight")
-        else:
-            plt.show()
+        plt.close(fig)
         return fig
