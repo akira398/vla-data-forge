@@ -270,6 +270,15 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
     # Convenience helpers
     # ------------------------------------------------------------------
 
+    def load_episode(self, episode_id: str):
+        for ep in self:
+            if ep.episode_id == episode_id:
+                return ep
+        return None
+
+    def episode_ids(self):
+        return [ep.episode_id for ep in self]
+
     def __len__(self) -> int:
         if self.config.max_episodes is not None:
             return self.config.max_episodes
