@@ -295,53 +295,67 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
         """
         Load from a locally downloaded dataset directory.
 
-        Uses streaming=True so the first episode is available immediately —
-        no upfront scan/indexing of the full dataset.
-
-        Tries ``load_from_disk`` first (handles datasets saved with
-        ``dataset.save_to_disk()``), then falls back to streaming
-        ``load_dataset`` for raw Parquet/Arrow directories downloaded
-        via ``huggingface-cli download``.
+        Loading strategy (in order):
+          1. ``load_from_disk``   — for datasets saved with dataset.save_to_disk()
+                                    (Arrow memory-map, instant open)
+          2. direct parquet       — for huggingface-cli download layout
+                                    (load_dataset("parquet", data_files=..., streaming=True))
+                                    Bypasses all auto-detection and network checks.
         """
         path = self.config.local_path
         if not path.exists():
-            raise FileNotFoundError(
-                f"ECoT local_path does not exist: {path}"
-            )
+            raise FileNotFoundError(f"ECoT local_path does not exist: {path}")
 
         logger.info("Loading ECoT dataset from local path: %s", path)
 
-        # Strategy 1: save_to_disk format (contains dataset_info.json / dataset_dict.json)
-        # load_from_disk uses memory-mapped Arrow — fast and no upfront scan.
-        has_info = (path / "dataset_info.json").exists()
-        has_dict = (path / "dataset_dict.json").exists()
-        if has_info or has_dict:
+        # Strategy 1: save_to_disk format — fast memory-mapped Arrow
+        if (path / "dataset_info.json").exists() or (path / "dataset_dict.json").exists():
             try:
                 ds = hf_datasets.load_from_disk(str(path))
-                # DatasetDict → extract the requested split
-                if hasattr(ds, "keys"):
+                if hasattr(ds, "keys"):  # DatasetDict → pick split
                     split = self.config.split
                     if split in ds:
                         ds = ds[split]
                     else:
                         first = next(iter(ds))
-                        logger.warning(
-                            "Split '%s' not found; using '%s' instead.", split, first,
-                        )
+                        logger.warning("Split '%s' not found; using '%s'.", split, first)
                         ds = ds[first]
-                logger.info("Loaded dataset from disk (Arrow / load_from_disk).")
+                logger.info("Opened dataset via load_from_disk (Arrow).")
                 return ds
             except Exception as e:
-                logger.debug("load_from_disk failed (%s); falling back…", e)
+                logger.debug("load_from_disk failed (%s); trying parquet…", e)
 
-        # Strategy 2: raw Parquet/Arrow files (huggingface-cli download layout).
-        # streaming=True avoids scanning all files before the first row is read.
-        logger.info("Streaming dataset from local parquet/arrow files.")
+        # Strategy 2: raw parquet files (huggingface-cli download layout).
+        # Use load_dataset("parquet", data_files=...) — purely local, no network,
+        # no auto-detection overhead.  Returns an IterableDataset immediately.
+        parquet_files = sorted(path.rglob("*.parquet"))
+        if not parquet_files:
+            parquet_files = sorted(path.rglob("*.arrow"))
+        if not parquet_files:
+            raise FileNotFoundError(
+                f"No parquet or arrow files found under {path}. "
+                "Check that the download completed successfully."
+            )
+
+        # Filter to the requested split subdirectory if one exists
+        split = self.config.split
+        split_files = [f for f in parquet_files if split in f.parts]
+        if split_files:
+            parquet_files = split_files
+            logger.info("Found %d parquet files for split '%s'.", len(parquet_files), split)
+        else:
+            logger.info(
+                "No split '%s' subdirectory found; using all %d parquet files.",
+                split, len(parquet_files),
+            )
+
         ds = hf_datasets.load_dataset(
-            str(path),
-            split=self.config.split,
+            "parquet",
+            data_files={"train": [str(f) for f in parquet_files]},
             streaming=True,
+            split="train",
         )
+        logger.info("Streaming from %d local parquet files.", len(parquet_files))
         return ds
 
     @property
