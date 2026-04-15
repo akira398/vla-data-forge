@@ -279,25 +279,29 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
             return self._load_from_local(hf_datasets)
 
         logger.info(
-            "Loading HF dataset %s (split=%s)…",
+            "Streaming HF dataset %s (split=%s)…",
             self.config.hf_repo,
             self.config.split,
         )
         ds = hf_datasets.load_dataset(
             self.config.hf_repo,
             split=self.config.split,
+            streaming=True,
             cache_dir=str(self.config.cache_dir) if self.config.cache_dir else None,
         )
-        logger.info("Loaded %d rows from %s.", len(ds), self.config.hf_repo)
         return ds
 
     def _load_from_local(self, hf_datasets: Any) -> Any:
         """
         Load from a locally downloaded dataset directory.
 
+        Uses streaming=True so the first episode is available immediately —
+        no upfront scan/indexing of the full dataset.
+
         Tries ``load_from_disk`` first (handles datasets saved with
-        ``dataset.save_to_disk()``), then falls back to ``load_dataset``
-        for raw Parquet/Arrow directories.
+        ``dataset.save_to_disk()``), then falls back to streaming
+        ``load_dataset`` for raw Parquet/Arrow directories downloaded
+        via ``huggingface-cli download``.
         """
         path = self.config.local_path
         if not path.exists():
@@ -307,33 +311,37 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
 
         logger.info("Loading ECoT dataset from local path: %s", path)
 
-        # Strategy 1: save_to_disk format (dataset_info.json or dataset_dict.json)
-        try:
-            ds = hf_datasets.load_from_disk(str(path))
-            # DatasetDict → extract the requested split
-            if hasattr(ds, "column_names") and isinstance(ds.column_names, dict):
-                # It's a DatasetDict
-                split = self.config.split
-                if split in ds:
-                    ds = ds[split]
-                else:
-                    first = next(iter(ds))
-                    logger.warning(
-                        "Split '%s' not found in local dataset; using '%s' instead.",
-                        split, first,
-                    )
-                    ds = ds[first]
-            logger.info("Loaded %d rows from disk (load_from_disk).", len(ds))
-            return ds
-        except Exception as e:
-            logger.debug("load_from_disk failed (%s); trying load_dataset…", e)
+        # Strategy 1: save_to_disk format (contains dataset_info.json / dataset_dict.json)
+        # load_from_disk uses memory-mapped Arrow — fast and no upfront scan.
+        has_info = (path / "dataset_info.json").exists()
+        has_dict = (path / "dataset_dict.json").exists()
+        if has_info or has_dict:
+            try:
+                ds = hf_datasets.load_from_disk(str(path))
+                # DatasetDict → extract the requested split
+                if hasattr(ds, "keys"):
+                    split = self.config.split
+                    if split in ds:
+                        ds = ds[split]
+                    else:
+                        first = next(iter(ds))
+                        logger.warning(
+                            "Split '%s' not found; using '%s' instead.", split, first,
+                        )
+                        ds = ds[first]
+                logger.info("Loaded dataset from disk (Arrow / load_from_disk).")
+                return ds
+            except Exception as e:
+                logger.debug("load_from_disk failed (%s); falling back…", e)
 
-        # Strategy 2: raw Parquet/Arrow directory
+        # Strategy 2: raw Parquet/Arrow files (huggingface-cli download layout).
+        # streaming=True avoids scanning all files before the first row is read.
+        logger.info("Streaming dataset from local parquet/arrow files.")
         ds = hf_datasets.load_dataset(
             str(path),
             split=self.config.split,
+            streaming=True,
         )
-        logger.info("Loaded %d rows from disk (load_dataset).", len(ds))
         return ds
 
     @property
@@ -346,28 +354,52 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
     # DatasetReader interface
     # ------------------------------------------------------------------
 
+    def _is_streaming(self) -> bool:
+        """Return True if the underlying dataset is an IterableDataset."""
+        try:
+            import datasets as hf_datasets
+            return isinstance(self.hf_dataset, hf_datasets.IterableDataset)
+        except Exception:
+            return not hasattr(self.hf_dataset, "__len__")
+
     def __iter__(self) -> Iterator[ECoTEpisode]:
         ds = self.hf_dataset
         limit = self.config.max_episodes
 
-        indices = list(range(len(ds)))
-        if self.config.shuffle:
-            import random
-            rng = random.Random(self.config.shuffle_seed)
-            rng.shuffle(indices)
+        if self._is_streaming():
+            # IterableDataset — no len(), no index access, no shuffle support
+            if self.config.shuffle:
+                logger.warning(
+                    "shuffle=True is ignored in streaming mode; "
+                    "use dataset.shuffle() after loading if needed."
+                )
+            count = 0
+            for idx, row in enumerate(ds):
+                if limit is not None and count >= limit:
+                    break
+                episode = _parse_episode(row, idx, self.config.image_size)
+                if self.config.require_reasoning and not episode.has_any_reasoning():
+                    continue
+                yield episode
+                count += 1
+        else:
+            # Regular in-memory Dataset — supports indexing and shuffle
+            indices = list(range(len(ds)))
+            if self.config.shuffle:
+                import random
+                rng = random.Random(self.config.shuffle_seed)
+                rng.shuffle(indices)
 
-        count = 0
-        for idx in indices:
-            if limit is not None and count >= limit:
-                break
-            row = ds[idx]
-            episode = _parse_episode(row, idx, self.config.image_size)
-
-            if self.config.require_reasoning and not episode.has_any_reasoning():
-                continue
-
-            yield episode
-            count += 1
+            count = 0
+            for idx in indices:
+                if limit is not None and count >= limit:
+                    break
+                row = ds[idx]
+                episode = _parse_episode(row, idx, self.config.image_size)
+                if self.config.require_reasoning and not episode.has_any_reasoning():
+                    continue
+                yield episode
+                count += 1
 
     def load_episode(self, episode_id: str) -> Optional[ECoTEpisode]:
         """
@@ -397,6 +429,14 @@ class ECoTDatasetReader(DatasetReader[ECoTEpisode]):
         return self._ids
 
     def __len__(self) -> int:
+        if self._is_streaming():
+            # IterableDataset has no length; return the cap or a sentinel
+            if self.config.max_episodes is not None:
+                return self.config.max_episodes
+            raise TypeError(
+                "Cannot determine length of a streaming dataset without max_episodes set. "
+                "Set max_episodes in ECoTDatasetConfig or iterate directly."
+            )
         n = len(self.hf_dataset)
         if self.config.max_episodes is not None:
             return min(n, self.config.max_episodes)
