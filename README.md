@@ -141,47 +141,129 @@ pip install -e ".[all]"
 
 ## Quick Start
 
-### 1. Inspect Embodied-CoT episodes
+### 1. Download the datasets
 
+**Embodied-CoT** (HuggingFace):
 ```bash
-# Show 3 episode grids in a matplotlib window
-python scripts/visualize_ecot.py --max-episodes 3
-
-# Save PNG grids and trajectory plots
-python scripts/visualize_ecot.py --max-episodes 5 --mode summary --save-dir outputs/viz
-
-# Show full reasoning trace for step 4 of episode 0
-python scripts/visualize_ecot.py --episode-idx 0 --step-idx 4 --mode step
+huggingface-cli download Embodied-CoT/embodied_features_bridge \
+    --repo-type dataset --local-dir /datasets/embodied_features_bridge
 ```
 
-### 2. Generate reasoning traces
+**Bridge v2** (OpenVLA layout):
+```bash
+wget -r -nH --cut-dirs=4 --reject="index.html*" \
+    https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/
+mv bridge_dataset bridge_orig
+# Result: bridge_orig/1.0.0/dataset_info.json + *.tfrecord.gz
+```
+
+---
+
+### 2. Visualize Embodied-CoT episodes
+
+All figures are saved to disk — safe to run on headless servers.
+
+```bash
+# Frame grids (saves to outputs/viz/ecot/ by default):
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge
+
+# Full summary dashboard:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge \
+    --mode summary --max-episodes 10
+
+# Reasoning trace for step 4 of episode 0:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge \
+    --mode step --episode-idx 0 --step-idx 4
+
+# Action trajectory plots:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge \
+    --mode trajectory
+
+# Save MP4 videos (16 frames per episode):
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge \
+    --mode video --max-frames 16
+
+# Save GIFs:
+python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge \
+    --mode gif --fps 10
+
+# Stream from HF Hub instead (no local download needed):
+python scripts/visualize_ecot.py --max-episodes 5
+```
+
+Available modes: `grid` | `step` | `trajectory` | `summary` | `video` | `gif`
+
+---
+
+### 3. Visualize Bridge v2 episodes
+
+```bash
+# Dual-camera frame grid (saves to outputs/viz/bridge/ by default):
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig
+
+# Full summary dashboard:
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode summary --max-episodes 10
+
+# Gripper open/close timeline:
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode gripper
+
+# 7-DoF action component panels:
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode actions
+
+# Proprioceptive state trajectory:
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode state
+
+# Save MP4 videos (primary camera):
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode video --camera 0 --fps 10
+
+# Save GIFs (secondary camera):
+python scripts/visualize_bridge.py --local-path /datasets/bridge_orig \
+    --mode gif --camera 1
+```
+
+Available modes: `dual` | `grid` | `gripper` | `actions` | `state` | `summary` | `video` | `gif`
+
+---
+
+### 4. Generate reasoning traces
 
 ```bash
 # With Gemini (default)
-python scripts/generate_traces.py --max-episodes 10
+python scripts/generate_traces.py \
+    --local-path /datasets/embodied_features_bridge --max-episodes 10
 
 # With GPT-4o
 python scripts/generate_traces.py \
+    --local-path /datasets/embodied_features_bridge \
     --backend-config configs/backends/openai.yaml \
     --max-episodes 10
 
 # Dry run (builds prompts but skips API calls)
-python scripts/generate_traces.py --dry-run --max-episodes 5
+python scripts/generate_traces.py \
+    --local-path /datasets/embodied_features_bridge --dry-run --max-episodes 5
 ```
 
-### 3. Curate interleaved dataset
+### 5. Curate interleaved dataset
 
 ```bash
-python scripts/curate_interleaved.py --max-episodes 100 --alignment nearest
-
-# With Bridge v2 from local HDF5
 python scripts/curate_interleaved.py \
-    --bridge-source hdf5 \
-    --bridge-path /data/bridge_v2 \
-    --output-dir outputs/curated
+    --local-path /datasets/embodied_features_bridge \
+    --bridge-path /datasets/bridge_orig \
+    --alignment nearest
+
+# Limit episodes for a quick test run:
+python scripts/curate_interleaved.py \
+    --local-path /datasets/embodied_features_bridge \
+    --bridge-path /datasets/bridge_orig \
+    --max-episodes 100 --alignment nearest
 ```
 
-### 4. Validate output
+### 6. Validate output
 
 ```bash
 python scripts/validate_dataset.py outputs/curated/episodes.jsonl
