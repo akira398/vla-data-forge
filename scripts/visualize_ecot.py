@@ -1,36 +1,47 @@
 """
 CLI: Inspect the Embodied-CoT JSON file (embodied_features_bridge.json).
 
-JSON structure:
+JSON structure (actual on-disk format):
   {
-    "/path/to/bridge_episode/out.npy": [       ← episode key (= Bridge v2 path)
-      {                                         ← one dict per step
-        "frame_index":          0,
-        "language_instruction": "pick up ...",
-        "task":                 "...",          ← high-level task
-        "plan":                 "...",          ← multi-step plan
-        "subtask_reason":       "...",          ← why this subtask
-        "subtask":              "...",          ← current subtask label
-        "move_reason":          "...",          ← why this motion
-        "move":                 "...",          ← motion description
-        "gripper":              "...",          ← future gripper positions (5-step lookahead)
-        "bboxes":               "...",          ← visible objects + bounding boxes
-        "action":               [x,y,z,r,p,y,g] ← 7-DoF action
-      },
-      ...
-    ],
+    "/nfs/.../numpy_256/bridge_data_v2/env/task/ep/split/out.npy": {  ← file_path key
+      "43": {                                                            ← episode_id (string)
+        "metadata": {
+          "episode_id":           "43",
+          "file_path":            "...",
+          "n_steps":              47,
+          "language_instruction": "pick up the block",
+          "caption":              "scene description"
+        },
+        "features": {
+          "state_3d":          [[x,y,z], ...],       per-step 3D end-effector
+          "move_primitive":    ["move forward", ...], per-step motion label
+          "gripper_positions": [[x,y], ...]           per-step gripper pixel coords
+        },
+        "reasoning": {
+          "0": {
+            "task":           "...",   high-level task description
+            "plan":           "...",   multi-step plan
+            "subtask":        "...",   current subtask label
+            "subtask_reason": "...",   why this subtask
+            "move":           "...",   motion description
+            "move_reason":    "..."    why this motion
+          },
+          ...                          sparse — not every step is annotated
+        }
+      }
+    },
     ...
   }
 
 Usage
 -----
-# Inspect structure + print first N episodes:
+# Show top-level structure + first N file-path entries:
 python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge
 
-# Print more episodes:
+# Show more entries:
 python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge --n 10
 
-# Show all steps for the first episode:
+# Show all steps of the first episode:
 python scripts/visualize_ecot.py --local-path /datasets/embodied_features_bridge --steps
 """
 
@@ -72,8 +83,8 @@ def main(
         ..., "--local-path", "-p",
         help="Directory containing embodied_features_bridge.json (or path to the file itself).",
     ),
-    n: int = typer.Option(5, "--n", help="Number of episodes to show."),
-    steps: bool = typer.Option(False, "--steps", help="Print all steps of the first episode."),
+    n: int = typer.Option(5, "--n", help="Number of file-path entries to show."),
+    steps: bool = typer.Option(False, "--steps", help="Print all reasoning steps of the first episode."),
 ) -> None:
 
     json_file = _find_json(Path(local_path))
@@ -85,82 +96,110 @@ def main(
         data = json.load(f)
 
     # ── top-level stats ───────────────────────────────────────────────────────
-    console.print(f"[bold]Top-level type:[/bold]     {type(data).__name__}")
-    console.print(f"[bold]Total episodes:[/bold]     {len(data):,}")
+    console.print(f"[bold]Top-level type:[/bold]       {type(data).__name__}")
+    console.print(f"[bold]Total file-path keys:[/bold] {len(data):,}")
 
-    ep_keys = list(data.keys())
-    first_val = data[ep_keys[0]]
-    console.print(f"[bold]Value type:[/bold]         {type(first_val).__name__}")
+    fp_keys = list(data.keys())
+    first_fp_val = data[fp_keys[0]]
 
-    if isinstance(first_val, list) and first_val:
-        console.print(f"[bold]Steps per episode:[/bold]  e.g. {len(first_val)} (first episode)")
-        console.print(f"[bold]Step fields:[/bold]        {list(first_val[0].keys())}")
-    elif isinstance(first_val, dict):
-        console.print(f"[bold]Episode fields:[/bold]     {list(first_val.keys())}")
+    console.print(f"[bold]Value type:[/bold]           {type(first_fp_val).__name__}")
 
-    # ── episode summary table ─────────────────────────────────────────────────
+    if isinstance(first_fp_val, dict):
+        ep_ids = list(first_fp_val.keys())
+        console.print(f"[bold]Episodes per file:[/bold]    e.g. {len(ep_ids)} (first file)")
+
+        first_ep = first_fp_val[ep_ids[0]]
+        if isinstance(first_ep, dict):
+            console.print(f"[bold]Episode top keys:[/bold]     {list(first_ep.keys())}")
+            if "metadata" in first_ep:
+                console.print(f"[bold]Metadata keys:[/bold]        {list(first_ep['metadata'].keys())}")
+            if "features" in first_ep:
+                console.print(f"[bold]Feature keys:[/bold]         {list(first_ep['features'].keys())}")
+            if "reasoning" in first_ep:
+                r = first_ep["reasoning"]
+                console.print(f"[bold]Reasoning steps:[/bold]      {len(r)} annotated (sparse)")
+                if r:
+                    sample_r = next(iter(r.values()))
+                    console.print(f"[bold]Reasoning fields:[/bold]     {list(sample_r.keys())}")
+
+    # ── file-path summary table ───────────────────────────────────────────────
     console.print()
-    t = Table(title=f"First {min(n, len(ep_keys))} episodes", show_lines=True)
-    t.add_column("#",          style="cyan",  justify="right", no_wrap=True)
-    t.add_column("Episode path (key)",         overflow="fold", max_width=50)
-    t.add_column("Steps",      justify="right", no_wrap=True)
+    t = Table(title=f"First {min(n, len(fp_keys))} file-path entries", show_lines=True)
+    t.add_column("#",            style="cyan", justify="right", no_wrap=True)
+    t.add_column("File path (key)",            overflow="fold", max_width=55)
+    t.add_column("Episodes",     justify="right", no_wrap=True)
+    t.add_column("n_steps",      justify="right", no_wrap=True)
     t.add_column("Instruction",                overflow="fold", max_width=40)
-    t.add_column("Task",                       overflow="fold", max_width=40)
-    t.add_column("Action[0] (7-DoF)",          overflow="fold", max_width=35)
+    t.add_column("Reasoning steps", justify="right", no_wrap=True)
 
-    for i, key in enumerate(ep_keys[:n]):
-        val = data[key]
-        if isinstance(val, list) and val:
-            first_step = val[0]
-            instr   = first_step.get("language_instruction", "")[:40]
-            task    = first_step.get("task", "")[:40]
-            action  = first_step.get("action")
-            act_str = str([round(x, 3) for x in action]) if action else "—"
-            n_steps = str(len(val))
-        elif isinstance(val, dict):
-            instr   = val.get("language_instruction", "")[:40]
-            task    = val.get("task", "")[:40]
-            action  = val.get("action")
-            act_str = str([round(x, 3) for x in action]) if action else "—"
-            n_steps = "1"
-        else:
-            instr, task, act_str, n_steps = "", "", "—", "?"
-        t.add_row(str(i), key[-50:], n_steps, instr, task, act_str)
+    for i, fp in enumerate(fp_keys[:n]):
+        fp_val = data[fp]
+        if not isinstance(fp_val, dict):
+            t.add_row(str(i), fp[-55:], "?", "?", "?", "?")
+            continue
+
+        num_eps = str(len(fp_val))
+        # Use first episode for details
+        first_ep_id = next(iter(fp_val))
+        ep = fp_val[first_ep_id]
+        meta = ep.get("metadata", {}) if isinstance(ep, dict) else {}
+        n_steps = str(meta.get("n_steps", "?"))
+        instr = (meta.get("language_instruction") or "")[:40]
+        reasoning = ep.get("reasoning", {}) if isinstance(ep, dict) else {}
+        n_reasoning = str(len(reasoning))
+
+        t.add_row(str(i), fp[-55:], num_eps, n_steps, instr, n_reasoning)
 
     console.print(t)
 
-    # ── all steps for first episode ───────────────────────────────────────────
+    # ── detailed first episode ────────────────────────────────────────────────
     if steps:
-        key = ep_keys[0]
-        val = data[key]
-        step_list = val if isinstance(val, list) else [val]
+        first_fp = fp_keys[0]
+        fp_val = data[first_fp]
+        if isinstance(fp_val, dict):
+            first_ep_id = next(iter(fp_val))
+            ep = fp_val[first_ep_id]
+            reasoning = ep.get("reasoning", {}) if isinstance(ep, dict) else {}
+            meta = ep.get("metadata", {}) if isinstance(ep, dict) else {}
+            features = ep.get("features", {}) if isinstance(ep, dict) else {}
 
-        console.print(f"\n[bold]All steps for episode:[/bold] {key}\n")
+            console.print(f"\n[bold]File path:[/bold]   {first_fp}")
+            console.print(f"[bold]Episode ID:[/bold]  {first_ep_id}")
+            console.print(f"[bold]Instruction:[/bold] {meta.get('language_instruction', '')}")
+            console.print(f"[bold]n_steps:[/bold]     {meta.get('n_steps', '?')}")
+            console.print(f"[bold]Caption:[/bold]     {(meta.get('caption') or '')[:80]}")
 
-        st = Table(title=f"{len(step_list)} steps", show_lines=True)
-        st.add_column("frame", justify="right", no_wrap=True)
-        st.add_column("action (7-DoF)",    overflow="fold", max_width=40)
-        st.add_column("subtask",           overflow="fold", max_width=30)
-        st.add_column("move",              overflow="fold", max_width=30)
-        st.add_column("task_reason",       overflow="fold", max_width=40)
-        st.add_column("bboxes",            overflow="fold", max_width=35)
+            # Features summary
+            console.print()
+            console.print("[bold]Features:[/bold]")
+            for feat_key, feat_val in features.items():
+                sample = feat_val[:2] if isinstance(feat_val, list) and feat_val else feat_val
+                console.print(f"  {feat_key}: {len(feat_val) if isinstance(feat_val, list) else '?'} items — sample: {sample}")
 
-        for s in step_list:
-            action = s.get("action")
-            act_str = str([round(x, 3) for x in action]) if action else "—"
-            st.add_row(
-                str(s.get("frame_index", "?")),
-                act_str,
-                (s.get("subtask") or "")[:30],
-                (s.get("move") or "")[:30],
-                (s.get("task") or "")[:40],
-                (s.get("bboxes") or "")[:35],
-            )
-        console.print(st)
+            # Reasoning steps table
+            if reasoning:
+                console.print()
+                st = Table(title=f"{len(reasoning)} annotated reasoning steps", show_lines=True)
+                st.add_column("step", justify="right", no_wrap=True)
+                st.add_column("task",         overflow="fold", max_width=35)
+                st.add_column("subtask",      overflow="fold", max_width=25)
+                st.add_column("move",         overflow="fold", max_width=25)
+                st.add_column("move_reason",  overflow="fold", max_width=35)
 
-        # Full detail of first step
-        console.print("\n[bold]Full first step (raw JSON):[/bold]")
-        console.print(Panel(json.dumps(step_list[0], indent=2), expand=False))
+                for step_idx, r in list(reasoning.items())[:20]:
+                    st.add_row(
+                        str(step_idx),
+                        (r.get("task") or "")[:35],
+                        (r.get("subtask") or "")[:25],
+                        (r.get("move") or "")[:25],
+                        (r.get("move_reason") or "")[:35],
+                    )
+                console.print(st)
+
+                # Full detail of first annotated step
+                first_step_key = next(iter(reasoning))
+                console.print(f"\n[bold]Full reasoning for step {first_step_key} (raw JSON):[/bold]")
+                console.print(Panel(json.dumps(reasoning[first_step_key], indent=2), expand=False))
 
     console.print("\n[bold green]Done.[/bold green]")
 

@@ -68,12 +68,36 @@ def _normalize_episode_id(ep_id: str, source_file: Optional[str] = None) -> str:
     """
     Produce a normalised identifier for episode matching.
 
-    ECoT stores the Bridge v2 file path as the episode ID.
-    Strip any leading slashes / drive letters for robust matching.
+    ECoT stores Bridge v2 file paths as absolute NFS paths, e.g.:
+      /nfs/s3_bucket/.../numpy_256/bridge_data_v2/env/task/ep/split/out.npy
+
+    Bridge v2 ``source_file`` uses relative paths, e.g.:
+      bridge_data_v2/env/task/ep/split/out.npy
+
+    We strip everything up to and including the first occurrence of a known
+    root directory name (``bridge_data_v2``, ``scripted_numpy_256``, etc.) so
+    both datasets produce the same normalised key.
     """
     candidate = source_file or ep_id
-    # Normalise path separators and strip leading separators
-    return candidate.replace("\\", "/").lstrip("/")
+    candidate = candidate.replace("\\", "/")
+
+    # Known relative-root markers — the relative path starts at the marker
+    _ROOT_MARKERS = (
+        "bridge_data_v2/",
+        "scripted_numpy_256/",
+        "numpy_256/bridge_data_v2/",
+    )
+    for marker in _ROOT_MARKERS:
+        idx = candidate.find(marker)
+        if idx != -1:
+            # Start from "bridge_data_v2/..." (skip "numpy_256/" if present)
+            relative = candidate[idx:]
+            # If matched "numpy_256/bridge_data_v2/", advance past "numpy_256/"
+            if relative.startswith("numpy_256/"):
+                relative = relative[len("numpy_256/"):]
+            return relative
+
+    return candidate.lstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +318,8 @@ class EpisodeInterleaver:
         if key in idx:
             return idx[key]
 
-        # Match via episode_metadata
-        source_file = ecot_ep.metadata.get("episode_metadata", {}).get("file_path")
+        # Match via metadata file_path (ECoT stores the raw NFS path here)
+        source_file = ecot_ep.metadata.get("file_path")
         if source_file:
             norm_src = _normalize_episode_id(str(source_file))
             if norm_src in idx:

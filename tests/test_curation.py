@@ -14,7 +14,7 @@ import pytest
 
 from vla_curator.config import CurationConfig, ECoTDatasetConfig, BridgeV2DatasetConfig
 from vla_curator.curation.export import JSONLExporter
-from vla_curator.curation.interleaver import EpisodeInterleaver
+from vla_curator.curation.interleaver import EpisodeInterleaver, _normalize_episode_id
 from vla_curator.curation.validator import DatasetValidator, ValidationResult
 from vla_curator.datasets.base import DatasetReader
 from vla_curator.schemas.bridge_v2 import BridgeEpisode
@@ -157,6 +157,44 @@ class TestEpisodeInterleaver:
         assert meta.num_steps_bridge == 10
         assert meta.num_steps_ecot == 10
         assert meta.strategy == "nearest"
+
+
+# ---------------------------------------------------------------------------
+# Path normalization
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeEpisodeId:
+    def test_absolute_nfs_path_stripped(self):
+        ecot_path = (
+            "/nfs/s3_bucket/username/numpy_256/"
+            "bridge_data_v2/datacol2_tabletop_manipulations/put_knife_on_cutting_board/"
+            "2023-01-21_13-46-24/0/out.npy"
+        )
+        result = _normalize_episode_id(ecot_path)
+        assert result == (
+            "bridge_data_v2/datacol2_tabletop_manipulations/put_knife_on_cutting_board/"
+            "2023-01-21_13-46-24/0/out.npy"
+        )
+
+    def test_relative_bridge_path_unchanged(self):
+        rel_path = "bridge_data_v2/env/task/ep/split/out.npy"
+        assert _normalize_episode_id(rel_path) == rel_path
+
+    def test_leading_slash_stripped_fallback(self):
+        path = "/bridge_data_v2/env/task/ep/out.npy"
+        assert _normalize_episode_id(path) == "bridge_data_v2/env/task/ep/out.npy"
+
+    def test_source_file_takes_priority(self):
+        ep_id = "some_other_id"
+        source = "/nfs/foo/numpy_256/bridge_data_v2/env/task/ep/out.npy"
+        result = _normalize_episode_id(ep_id, source_file=source)
+        assert result == "bridge_data_v2/env/task/ep/out.npy"
+
+    def test_backslashes_normalised(self):
+        path = "bridge_data_v2\\env\\task\\ep\\out.npy"
+        result = _normalize_episode_id(path)
+        assert "\\" not in result
 
 
 # ---------------------------------------------------------------------------
