@@ -91,7 +91,7 @@ def _parse_steps(episode) -> list[dict]:
         steps.append({
             "image_0":            _arr(obs["image_0"]).astype(np.uint8),
             "image_1":            _arr(obs["image_1"]).astype(np.uint8),
-            "language_instruction": _t(obs["language_instruction"]),
+            "language_instruction": _t(step["language_instruction"]),
             "task_reasoning":     _t(obs["task_reasoning"]),
             "subtask_reasoning":  _t(obs["subtask_reasoning"]),
             "move_reasoning":     _t(obs["move_reasoning"]),
