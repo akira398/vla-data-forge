@@ -1,7 +1,8 @@
 """
 CLI: Visualize a curated RLDS dataset episode frame by frame.
 
-Produces one PNG per step.  Each PNG has a white background and shows:
+Produces one PNG per step for each split (train, val, etc.).
+Each PNG has a white background and shows:
   - Header:   "Step 0 / 27  —  <task instruction>"
   - Images:   primary camera (cam0) and wrist camera (cam1) side by side
   - Reasoning: task / subtask / move reasoning text
@@ -11,18 +12,18 @@ Layout mirrors the Bridge v2 dual-camera viewer.
 
 Usage
 -----
-# Random episode, matched dataset:
+# Random episode from all splits:
 python scripts/visualize_curated.py \
     --path outputs/curated/vla_curated_dataset/matched/1.0.0
 
-# Specific episode:
+# Specific episode index:
 python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/reasoning_only/1.0.0 \
+    --path outputs/curated/vla_curated_dataset/matched/1.0.0 \
     --episode-index 5
 
 # Custom output dir:
 python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/full/1.0.0 \
+    --path outputs/curated/vla_curated_dataset/matched/1.0.0 \
     --save-dir outputs/viz/curated
 """
 
@@ -52,7 +53,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 
-def _load_episode(dataset_path: Path, episode_index: int):
+def _load_episode(dataset_path: Path, split: str, episode_index: int):
     try:
         import tensorflow_datasets as tfds
     except ImportError as exc:
@@ -62,13 +63,23 @@ def _load_episode(dataset_path: Path, episode_index: int):
         ) from exc
 
     builder = tfds.builder_from_directory(str(dataset_path))
-    ds = builder.as_dataset(split="train")
+    ds = builder.as_dataset(split=split)
     for i, ep in enumerate(ds):
         if i == episode_index:
             return ep
     raise IndexError(
-        f"Episode index {episode_index} is out of range for this dataset."
+        f"Episode index {episode_index} is out of range for split '{split}'."
     )
+
+
+def _get_splits(dataset_path: Path) -> list[str]:
+    try:
+        import tensorflow_datasets as tfds
+    except ImportError:
+        return ["train"]
+
+    builder = tfds.builder_from_directory(str(dataset_path))
+    return sorted(builder.info.splits.keys())
 
 
 def _t(val) -> str:
@@ -138,22 +149,8 @@ def _save_step_figure(
     step_idx: int,
     total_steps: int,
     save_path: Path,
+    split: str = "",
 ) -> None:
-    """
-    Save one PNG for a single step.
-
-    Layout
-    ------
-    ┌──────────────────────────────────────────────────────────┐
-    │  Step 3 / 27  —  pick up the orange from the table       │  ← suptitle
-    ├──────────────────┬───────────────────┬───────────────────┤
-    │                  │                   │  task_reasoning   │
-    │    cam 0         │    cam 1          │  subtask_reas.    │
-    │  (primary)       │  (wrist)          │  move_reasoning   │
-    │                  │                   │  confidence       │
-    │                  │                   │  action           │
-    └──────────────────┴───────────────────┴───────────────────┘
-    """
     fig = plt.figure(figsize=(14, 5.5), facecolor="white")
 
     task = step["language_instruction"] or "—"
@@ -163,9 +160,10 @@ def _save_step_figure(
     if step["is_last"]:
         flags.append("END")
     flag_str = f"  [{' · '.join(flags)}]" if flags else ""
+    split_str = f"  ({split})" if split else ""
 
     fig.suptitle(
-        f"Step {step_idx} / {total_steps - 1}{flag_str}   —   {task}",
+        f"Step {step_idx} / {total_steps - 1}{flag_str}{split_str}   —   {task}",
         fontsize=11, fontweight="bold", color="black", y=0.98,
     )
 
@@ -310,6 +308,65 @@ def _save_step_figure(
 
 
 # ---------------------------------------------------------------------------
+# Visualize one split
+# ---------------------------------------------------------------------------
+
+
+def _visualize_split(
+    dataset_path: Path,
+    split: str,
+    episode_index: int,
+    max_frames: int | None,
+    save_dir: Path,
+) -> None:
+    console.print(f"\n[bold]Split: {split}[/bold]")
+
+    try:
+        episode = _load_episode(dataset_path, split, episode_index)
+    except IndexError as e:
+        console.print(f"  [yellow]{e}[/yellow]")
+        return
+
+    steps = _parse_steps(episode)
+    if not steps:
+        console.print(f"  [yellow]Episode has no steps in split '{split}'.[/yellow]")
+        return
+
+    total_display = len(steps)
+    if max_frames is not None:
+        steps = steps[:max_frames]
+    total = len(steps)
+
+    # Console summary
+    n_with_r = sum(1 for s in steps if s["task_reasoning"])
+    conf_vals = [s["alignment_confidence"] for s in steps]
+
+    t = Table(title=f"Episode {episode_index} ({split})", show_lines=True)
+    t.add_column("Field", style="bold")
+    t.add_column("Value")
+    t.add_row("Task",           steps[0]["language_instruction"])
+    t.add_row("Total steps",    str(total_display))
+    t.add_row("Saving frames",  str(total))
+    t.add_row("With reasoning", f"{n_with_r}/{total}  ({100*n_with_r/max(total,1):.0f}%)")
+    t.add_row("Avg confidence", f"{sum(conf_vals)/len(conf_vals):.3f}")
+    console.print(t)
+
+    # Save one PNG per step
+    variant = dataset_path.parent.name  # "matched" or "reasoning_only"
+    ep_dir = save_dir / split / f"ep{episode_index:05d}_{variant}"
+    ep_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"Saving {total} frames to [bold]{ep_dir}[/bold] …")
+    for i, step in enumerate(steps):
+        out = ep_dir / f"step_{i:05d}.png"
+        _save_step_figure(step, i, total_display, out, split=split)
+        if (i + 1) % 10 == 0 or i == total - 1:
+            console.print(f"  {i+1}/{total}")
+
+    console.print(f"[green]Done.[/green]  {total} PNGs → {ep_dir}")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -319,7 +376,7 @@ def main(
     path: Path = typer.Option(
         ..., "--path", "-p",
         help="Path to a TFDS dataset version dir "
-             "(e.g. outputs/curated/vla_curated_dataset/full/1.0.0).",
+             "(e.g. outputs/curated/vla_curated_dataset/matched/1.0.0).",
     ),
     episode_index: int = typer.Option(
         -1, "--episode-index", "-e",
@@ -338,51 +395,14 @@ def main(
         episode_index = random.randint(0, 5000)
         console.print(f"Random episode index: [bold]{episode_index}[/bold]")
 
-    console.print(f"Loading episode {episode_index} from [bold]{path}[/bold] …")
-    try:
-        episode = _load_episode(path, episode_index)
-    except IndexError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
+    splits = _get_splits(path)
+    console.print(f"Dataset splits: [bold]{', '.join(splits)}[/bold]")
+    console.print(f"Episode index:  [bold]{episode_index}[/bold]")
 
-    steps = _parse_steps(episode)
-    if not steps:
-        console.print("[red]Episode has no steps.[/red]")
-        raise typer.Exit(1)
+    for split in splits:
+        _visualize_split(path, split, episode_index, max_frames, save_dir)
 
-    if max_frames is not None:
-        steps = steps[:max_frames]
-
-    total = len(steps)   # after possible truncation (for header display use original)
-    total_display = len(_parse_steps(episode))  # original total for "X / N" header
-
-    # Console summary
-    n_with_r  = sum(1 for s in steps if s["task_reasoning"])
-    conf_vals = [s["alignment_confidence"] for s in steps]
-
-    t = Table(title=f"Episode {episode_index}", show_lines=True)
-    t.add_column("Field",  style="bold")
-    t.add_column("Value")
-    t.add_row("Task",           steps[0]["language_instruction"])
-    t.add_row("Total steps",    str(total_display))
-    t.add_row("Saving frames",  str(total))
-    t.add_row("With reasoning", f"{n_with_r}/{total}  ({100*n_with_r/max(total,1):.0f}%)")
-    t.add_row("Avg confidence", f"{sum(conf_vals)/len(conf_vals):.3f}")
-    console.print(t)
-
-    # Save one PNG per step
-    variant  = path.parent.name   # "full" or "reasoning_only"
-    ep_dir   = save_dir / f"ep{episode_index:05d}_{variant}"
-    ep_dir.mkdir(parents=True, exist_ok=True)
-
-    console.print(f"\nSaving {total} frames to [bold]{ep_dir}[/bold] …")
-    for i, step in enumerate(steps):
-        out = ep_dir / f"step_{i:05d}.png"
-        _save_step_figure(step, i, total_display, out)
-        if (i + 1) % 10 == 0 or i == total - 1:
-            console.print(f"  {i+1}/{total}")
-
-    console.print(f"\n[bold green]Done.[/bold green]  {total} PNGs → {ep_dir}")
+    console.print(f"\n[bold green]All done.[/bold green]  Output → {save_dir}")
 
 
 if __name__ == "__main__":
