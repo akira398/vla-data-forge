@@ -1,17 +1,17 @@
 """
 CLI: Curate the interleaved ECoT + Bridge v2 dataset.
 
-Loads both datasets, matches episodes by file-path key, aligns reasoning
-traces with Bridge v2 observations, and writes the result as either RLDS
-TFRecord files (default) or JSONL.
+Loads both datasets, matches episodes by composite key (file_path + episode_id),
+aligns reasoning traces with Bridge v2 observations, and writes the result as
+RLDS TFRecord files (default) or JSONL.
 
 RLDS output (default, --format rlds)
 --------------------------------------
 Writes two TFDS-compatible datasets under output_dir:
 
-  output_dir/vla_curated_dataset/full/1.0.0/
-      — All Bridge v2 episodes.  Episodes without ECoT reasoning get
-        empty strings for the reasoning fields.
+  output_dir/vla_curated_dataset/matched/1.0.0/
+      — All ECoT-matched Bridge v2 episodes.  Episodes where ECoT has no
+        reasoning annotations get empty strings for the reasoning fields.
 
   output_dir/vla_curated_dataset/reasoning_only/1.0.0/
       — Only episodes that have at least one reasoning annotation.
@@ -19,7 +19,7 @@ Writes two TFDS-compatible datasets under output_dir:
 Load them later with:
   import tensorflow_datasets as tfds
   ds = tfds.builder_from_directory(
-      "output_dir/vla_curated_dataset/full/1.0.0/"
+      "output_dir/vla_curated_dataset/matched/1.0.0/"
   ).as_dataset(split="train")
 
 JSONL output (--format jsonl)
@@ -29,12 +29,12 @@ Only matched episodes (ECoT + Bridge v2) are written.
 
 Usage
 -----
-# RLDS, all episodes (default):
+# RLDS, all matched episodes (default):
 python scripts/curate_interleaved.py \\
     --bridge-path /datasets/bridge_orig \\
     --ecot-path /datasets/embodied_features_bridge
 
-# RLDS, limit to 100 episodes for a quick test:
+# RLDS, limit to 100 Bridge v2 episodes for a quick test:
 python scripts/curate_interleaved.py \\
     --bridge-path /datasets/bridge_orig \\
     --ecot-path /datasets/embodied_features_bridge \\
@@ -114,7 +114,7 @@ def main(
         "both", "--variants",
         help=(
             "Which RLDS variants to write (rlds format only): "
-            "both (default) | full | reasoning_only"
+            "both (default) | matched | reasoning_only"
         ),
     ),
     no_validate: bool = typer.Option(False, "--no-validate"),
@@ -158,14 +158,14 @@ def main(
 
     # Parse --variants into a list for the RLDS exporter
     _variants_map = {
-        "both":           ["full", "reasoning_only"],
-        "full":           ["full"],
+        "both":           ["matched", "reasoning_only"],
+        "matched":        ["matched"],
         "reasoning_only": ["reasoning_only"],
     }
     if variants.lower() not in _variants_map:
         console.print(
             f"[red]Unknown --variants value '{variants}'. "
-            "Choose: both | full | reasoning_only[/red]"
+            "Choose: both | matched | reasoning_only[/red]"
         )
         raise typer.Exit(1)
     rlds_variants = _variants_map[variants.lower()]
@@ -187,17 +187,12 @@ def main(
     validator     = DatasetValidator() if cfg.validate_output else None
 
     # ── Episode source ───────────────────────────────────────────────────────
-    # RLDS: iterate ALL Bridge v2 episodes (unmatched ones get empty reasoning).
-    # JSONL: keep the old behaviour — only matched episodes.
-    if fmt == ExportFormat.RLDS:
-        console.print(
-            "\n[bold]Mode:[/bold] all Bridge v2 episodes "
-            "(unmatched → empty reasoning strings)"
-        )
-        episode_iter = interleaver.iter_all_episodes()
-    else:
-        console.print("\n[bold]Mode:[/bold] matched episodes only (ECoT + Bridge v2)")
-        episode_iter = interleaver.iter_episodes()
+    # Both RLDS and JSONL use matched-only iteration now.
+    console.print(
+        "\n[bold]Mode:[/bold] matched episodes only "
+        "(Bridge v2 episodes with ECoT match)"
+    )
+    episode_iter = interleaver.iter_matched_episodes()
 
     # ── Main loop ────────────────────────────────────────────────────────────
     total_written    = 0
@@ -239,7 +234,7 @@ def main(
 
     # ── Summary ──────────────────────────────────────────────────────────────
     without_reasoning = total_written - with_reasoning
-    match_pct = 100.0 * with_reasoning / max(total_written, 1)
+    reasoning_pct = 100.0 * with_reasoning / max(total_written, 1)
 
     from rich.table import Table
     t = Table(title="Curation summary", show_lines=True)
@@ -247,10 +242,10 @@ def main(
     t.add_column("Count",   justify="right")
     t.add_column("",        justify="right", style="dim")
 
-    t.add_row("Total episodes",             str(total_written),    "")
-    t.add_row("With ECoT reasoning",        str(with_reasoning),   f"{match_pct:.1f}%")
-    t.add_row("Without ECoT reasoning",     str(without_reasoning),f"{100-match_pct:.1f}%")
-    t.add_row("Validation failures",        str(validation_fails), "")
+    t.add_row("Matched (total)",               str(total_written),     "")
+    t.add_row("  with reasoning",              str(with_reasoning),    f"{reasoning_pct:.1f}%")
+    t.add_row("  without reasoning",           str(without_reasoning), f"{100-reasoning_pct:.1f}%")
+    t.add_row("Validation failures",           str(validation_fails),  "")
     console.print(t)
 
     console.print(f"\nOutput: [bold]{cfg.output_dir}[/bold]")
@@ -258,8 +253,8 @@ def main(
     if fmt == ExportFormat.RLDS:
         base = cfg.output_dir / "vla_curated_dataset"
         console.print("\n[bold]Load datasets with:[/bold]")
-        if "full" in rlds_variants:
-            console.print(f"  tfds.builder_from_directory('{base}/full/1.0.0/')")
+        if "matched" in rlds_variants:
+            console.print(f"  tfds.builder_from_directory('{base}/matched/1.0.0/')")
         if "reasoning_only" in rlds_variants:
             if with_reasoning > 0:
                 console.print(
@@ -268,7 +263,7 @@ def main(
             else:
                 console.print(
                     "  [yellow]reasoning_only was skipped "
-                    "(no ECoT matches found)[/yellow]"
+                    "(no episodes had reasoning)[/yellow]"
                 )
 
 

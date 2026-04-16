@@ -302,17 +302,16 @@ class EpisodeInterleaver:
     # Full-dataset iteration (all Bridge v2 episodes)
     # ------------------------------------------------------------------
 
-    def iter_all_episodes(self) -> Iterator[InterleavedEpisode]:
+    def iter_matched_episodes(self) -> Iterator[InterleavedEpisode]:
         """
-        Yield a merged episode for every Bridge v2 episode.
+        Yield merged episodes for Bridge v2 episodes that have an ECoT match.
 
-        Episodes that have an ECoT match are merged with reasoning traces
-        (same as ``iter_episodes``).  Episodes with no ECoT match are
-        wrapped with empty reasoning strings so every Bridge v2 trajectory
-        ends up in the output.
+        Iterates all Bridge v2 episodes, looks up each in the ECoT index,
+        and yields the merged result.  Unmatched Bridge v2 episodes are
+        skipped.  Matched episodes that have empty reasoning in ECoT still
+        get yielded (with empty reasoning strings).
 
-        Use this to produce the *full* RLDS dataset variant.
-        Use ``iter_episodes()`` when you only want matched episodes.
+        Use this as the primary episode source for curation.
         """
         ecot_index = self._build_ecot_index()
         logger.info("ECoT index built: %d entries.", len(ecot_index))
@@ -333,17 +332,14 @@ class EpisodeInterleaver:
                     stats["matched"] += 1
                 except Exception:
                     logger.exception(
-                        "Failed to interleave %s — falling back to empty reasoning.",
-                        bridge_ep.episode_id,
+                        "Failed to interleave episode %s.", bridge_ep.episode_id
                     )
-                    yield self._bridge_ep_empty(bridge_ep)
                     stats["errors"] += 1
             else:
-                yield self._bridge_ep_empty(bridge_ep)
                 stats["unmatched"] += 1
 
         logger.info(
-            "iter_all_episodes complete: matched=%d, unmatched=%d, errors=%d",
+            "iter_matched_episodes complete: matched=%d, unmatched=%d, errors=%d",
             stats["matched"],
             stats["unmatched"],
             stats["errors"],
@@ -367,53 +363,6 @@ class EpisodeInterleaver:
             norm_key = _normalize_path(ep.episode_id)
             index[norm_key] = ep
         return index
-
-    def _bridge_ep_empty(self, bridge_ep: BridgeEpisode) -> InterleavedEpisode:
-        """
-        Wrap a Bridge v2 episode as an InterleavedEpisode with empty reasoning.
-
-        The episode ID is preserved exactly as-is so loading code can always
-        trace back to the original Bridge v2 trajectory.
-        """
-        aligned_steps: List[AlignedStep] = []
-        for step in bridge_ep.steps:
-            enriched_obs = _bridge_obs_to_enriched(step.observation)
-            enriched_obs.step_index = step.step_index
-            aligned_steps.append(AlignedStep(
-                step_index=step.step_index,
-                observation=enriched_obs,
-                action=step.action,
-                reasoning=None,
-                is_first=step.is_first,
-                is_last=step.is_last,
-                source_dataset="bridge_v2",
-                alignment_confidence=0.0,
-            ))
-
-        alignment_meta = AlignmentMetadata(
-            strategy="none",
-            ecot_episode_id="",
-            bridge_episode_id=bridge_ep.episode_id,
-            num_steps_ecot=0,
-            num_steps_bridge=len(bridge_ep),
-            num_aligned_steps=len(bridge_ep),
-            num_annotated_steps=0,
-            reasoning_coverage=0.0,
-        )
-
-        return InterleavedEpisode(
-            episode_id=bridge_ep.episode_id,   # original path preserved
-            episode_num=bridge_ep.episode_num,
-            task_description=bridge_ep.language_instruction or "",
-            steps=aligned_steps,
-            alignment_metadata=alignment_meta,
-            provenance=DataProvenance(
-                ecot_source="",
-                bridge_source=bridge_ep.episode_id,
-                curation_version=self.config.schema_version,
-            ),
-            schema_version=self.config.schema_version,
-        )
 
     # ------------------------------------------------------------------
     # Matching

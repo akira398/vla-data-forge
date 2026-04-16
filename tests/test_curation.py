@@ -209,11 +209,11 @@ class TestNormalizeEpisodeId:
 
 
 # ---------------------------------------------------------------------------
-# iter_all_episodes
+# iter_matched_episodes
 # ---------------------------------------------------------------------------
 
 
-class TestIterAllEpisodes:
+class TestIterMatchedEpisodes:
     def _make_config(self):
         return CurationConfig(
             ecot=ECoTDatasetConfig(),
@@ -232,15 +232,15 @@ class TestIterAllEpisodes:
             MockECoTReader([sample_ecot_episode]),
             MockBridgeReader([sample_bridge_episode]),
         )
-        episodes = list(interleaver.iter_all_episodes())
+        episodes = list(interleaver.iter_matched_episodes())
         assert len(episodes) == 1
         # sample episodes share the same episode_id so they should match
         assert episodes[0].reasoning_coverage() > 0
 
-    def test_unmatched_bridge_episode_included(
+    def test_unmatched_bridge_episode_skipped(
         self, sample_ecot_episode, sample_bridge_episode
     ):
-        """iter_all_episodes yields Bridge ep even when there is no ECoT match."""
+        """iter_matched_episodes skips Bridge episodes with no ECoT match."""
         cfg = self._make_config()
         unrelated_bridge = BridgeEpisode(
             episode_id="bridge_data_v2/unrelated/path/out.npy"
@@ -250,28 +250,25 @@ class TestIterAllEpisodes:
             MockECoTReader([sample_ecot_episode]),
             MockBridgeReader([unrelated_bridge]),
         )
-        episodes = list(interleaver.iter_all_episodes())
-        assert len(episodes) == 1
-        assert episodes[0].episode_id == unrelated_bridge.episode_id
-        assert episodes[0].reasoning_coverage() == 0.0
+        episodes = list(interleaver.iter_matched_episodes())
+        assert len(episodes) == 0
 
-    def test_episode_id_preserved(self, sample_bridge_episode):
-        """Episode ID must be kept exactly as-is (absolute path if Bridge v2 gives one)."""
-        original_id = "bridge_data_v2/env/task/ep/split/out.npy"
-        bridge_ep = BridgeEpisode(episode_id=original_id)
+    def test_episode_id_preserved(self, sample_ecot_episode, sample_bridge_episode):
+        """Episode ID must be kept exactly as-is from the Bridge v2 episode."""
         cfg = self._make_config()
         interleaver = EpisodeInterleaver(
             cfg,
-            MockECoTReader([]),
-            MockBridgeReader([bridge_ep]),
+            MockECoTReader([sample_ecot_episode]),
+            MockBridgeReader([sample_bridge_episode]),
         )
-        episodes = list(interleaver.iter_all_episodes())
-        assert episodes[0].episode_id == original_id
+        episodes = list(interleaver.iter_matched_episodes())
+        assert len(episodes) == 1
+        assert episodes[0].episode_id == sample_bridge_episode.episode_id
 
-    def test_all_bridge_episodes_yielded(
+    def test_only_matched_episodes_yielded(
         self, sample_ecot_episode, sample_bridge_episode
     ):
-        """Every Bridge v2 episode appears in the output regardless of ECoT match."""
+        """Only Bridge v2 episodes with an ECoT match appear in output."""
         unrelated = BridgeEpisode(episode_id="bridge_data_v2/other/out.npy")
         cfg = self._make_config()
         interleaver = EpisodeInterleaver(
@@ -279,8 +276,9 @@ class TestIterAllEpisodes:
             MockECoTReader([sample_ecot_episode]),
             MockBridgeReader([sample_bridge_episode, unrelated]),
         )
-        episodes = list(interleaver.iter_all_episodes())
-        assert len(episodes) == 2
+        episodes = list(interleaver.iter_matched_episodes())
+        assert len(episodes) == 1
+        assert episodes[0].episode_id == sample_bridge_episode.episode_id
 
 
 # ---------------------------------------------------------------------------

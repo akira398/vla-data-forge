@@ -11,9 +11,9 @@ Layout mirrors the Bridge v2 dual-camera viewer.
 
 Usage
 -----
-# Random episode, full dataset:
+# Random episode, matched dataset:
 python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/full/1.0.0
+    --path outputs/curated/vla_curated_dataset/matched/1.0.0
 
 # Specific episode:
 python scripts/visualize_curated.py \
