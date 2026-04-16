@@ -250,7 +250,12 @@ def _make_builder_class():
                 if reasoning_only and not _has_reasoning(ep):
                     continue
                 try:
-                    yield ep.episode_id, _episode_to_dict(ep)
+                    # Use an integer counter as the TFDS shard key — it must be
+                    # unique across all examples. ep.episode_id is NOT suitable
+                    # because multiple Bridge v2 trajectories can share the same
+                    # source file path. The actual episode ID is preserved inside
+                    # episode_metadata/file_path in the serialised dict.
+                    yield count, _episode_to_dict(ep)
                     count += 1
                 except Exception:
                     logger.exception("Failed to serialise episode %s", ep.episode_id)
