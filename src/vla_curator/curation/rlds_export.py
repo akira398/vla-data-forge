@@ -28,10 +28,10 @@ Feature spec (Bridge v2 field names preserved, reasoning fields added):
   steps/observation/image_0           uint8   (480, 640, 3) JPEG
   steps/observation/image_1           uint8   (480, 640, 3) JPEG
   steps/observation/state             float32 (7,)
-  steps/observation/language_instruction  bytes
   steps/observation/task_reasoning    bytes   empty string when no ECoT match
   steps/observation/subtask_reasoning bytes
   steps/observation/move_reasoning    bytes
+  steps/language_instruction          bytes   (at step level, same as Bridge v2)
   steps/action                        float32 (7,)
   steps/is_first                      bool
   steps/is_last                       bool
@@ -96,11 +96,11 @@ def _make_feature_spec():
                     shape=(480, 640, 3), dtype=tf.uint8, encoding_format="jpeg"
                 ),
                 "state":                tfds.features.Tensor(shape=(7,), dtype=tf.float32),
-                "language_instruction": tfds.features.Text(),
                 "task_reasoning":       tfds.features.Text(),
                 "subtask_reasoning":    tfds.features.Text(),
                 "move_reasoning":       tfds.features.Text(),
             }),
+            "language_instruction": tfds.features.Text(),
             "action":               tfds.features.Tensor(shape=(7,), dtype=tf.float32),
             "is_first":             tfds.features.Scalar(dtype=tf.bool),
             "is_last":              tfds.features.Scalar(dtype=tf.bool),
@@ -157,11 +157,11 @@ def _episode_to_dict(ep: InterleavedEpisode) -> dict:
                 "image_0": _ensure_image(obs.load_image()),
                 "image_1": _ensure_image(obs.load_secondary_image()),
                 "state":                _pad7(obs.state if obs.state is not None else _BLANK_STATE),
-                "language_instruction": task_desc,
                 "task_reasoning":       (r.task_reasoning    or "") if r else "",
                 "subtask_reasoning":    (r.subtask_reasoning or "") if r else "",
                 "move_reasoning":       (r.move_reasoning    or "") if r else "",
             },
+            "language_instruction": task_desc,
             "action":               _pad7(step.action),
             "is_first":             bool(step.is_first),
             "is_last":              bool(step.is_last),
