@@ -122,9 +122,9 @@ def _make_mock_step(
             "image_0": rng.integers(0, 255, (h, w, 3), dtype=np.uint8),
             "image_1": rng.integers(0, 255, (h, w, 3), dtype=np.uint8),
             "state": np.zeros(7, dtype=np.float32),
+            "language_instruction": instruction,  # Bridge v2 stores it inside observation
         },
         "action": np.array(action or [0.0] * 7, dtype=np.float32),
-        "language_instruction": instruction,
         "is_first": is_first,
         "is_last": is_last,
         "is_terminal": is_last,
@@ -165,6 +165,15 @@ class TestParseTfdsStep:
         raw = _make_mock_step(instruction=b"put the apple in the bowl")
         step = _parse_tfds_step(raw, step_index=0, image_size=None, include_secondary=False)
         assert step.language_instruction == "put the apple in the bowl"
+
+    def test_step_level_instruction_fallback(self):
+        """Datasets that store language_instruction at the step level (not in obs) still work."""
+        raw = _make_mock_step(instruction=b"")
+        # Move instruction to step level to simulate non-Bridge-v2 RLDS format
+        del raw["observation"]["language_instruction"]
+        raw["language_instruction"] = b"fallback task"
+        step = _parse_tfds_step(raw, step_index=0, image_size=None, include_secondary=False)
+        assert step.language_instruction == "fallback task"
 
 
 # ---------------------------------------------------------------------------
