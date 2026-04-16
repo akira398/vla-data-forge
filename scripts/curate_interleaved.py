@@ -110,6 +110,13 @@ def main(
         "rlds", "--format", "-f",
         help="Output format: rlds (default) | jsonl",
     ),
+    variants: str = typer.Option(
+        "both", "--variants",
+        help=(
+            "Which RLDS variants to write (rlds format only): "
+            "both (default) | full | reasoning_only"
+        ),
+    ),
     no_validate: bool = typer.Option(False, "--no-validate"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -145,18 +152,34 @@ def main(
 
     fmt = ExportFormat(format.lower())
 
+    # Parse --variants into a list for the RLDS exporter
+    _variants_map = {
+        "both":           ["full", "reasoning_only"],
+        "full":           ["full"],
+        "reasoning_only": ["reasoning_only"],
+    }
+    if variants.lower() not in _variants_map:
+        console.print(
+            f"[red]Unknown --variants value '{variants}'. "
+            "Choose: both | full | reasoning_only[/red]"
+        )
+        raise typer.Exit(1)
+    rlds_variants = _variants_map[variants.lower()]
+
     console.print("[bold]Curation pipeline[/bold]")
     console.print(f"  ECoT:      {cfg.ecot.local_path or cfg.ecot.hf_repo}")
     console.print(f"  Bridge v2: {cfg.bridge.local_path or cfg.bridge.source}")
     console.print(f"  Alignment: {cfg.alignment_strategy}")
     console.print(f"  Format:    {fmt.value}")
+    if fmt == ExportFormat.RLDS:
+        console.print(f"  Variants:  {', '.join(rlds_variants)}")
     console.print(f"  Output:    {cfg.output_dir}")
 
     # ── Readers + interleaver ────────────────────────────────────────────────
     ecot_reader   = ECoTDatasetReader(cfg.ecot)
     bridge_reader = BridgeV2DatasetReader(cfg.bridge)
     interleaver   = EpisodeInterleaver(cfg, ecot_reader, bridge_reader)
-    exporter      = create_exporter(fmt, cfg.output_dir)
+    exporter      = create_exporter(fmt, cfg.output_dir, variants=rlds_variants)
     validator     = DatasetValidator() if cfg.validate_output else None
 
     # ── Episode source ───────────────────────────────────────────────────────
@@ -231,16 +254,18 @@ def main(
     if fmt == ExportFormat.RLDS:
         base = cfg.output_dir / "vla_curated_dataset"
         console.print("\n[bold]Load datasets with:[/bold]")
-        console.print(f"  tfds.builder_from_directory('{base}/full/1.0.0/')")
-        if with_reasoning > 0:
-            console.print(
-                f"  tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
-            )
-        else:
-            console.print(
-                "  [yellow]reasoning_only dataset was skipped "
-                "(no ECoT matches found)[/yellow]"
-            )
+        if "full" in rlds_variants:
+            console.print(f"  tfds.builder_from_directory('{base}/full/1.0.0/')")
+        if "reasoning_only" in rlds_variants:
+            if with_reasoning > 0:
+                console.print(
+                    f"  tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
+                )
+            else:
+                console.print(
+                    "  [yellow]reasoning_only was skipped "
+                    "(no ECoT matches found)[/yellow]"
+                )
 
 
 if __name__ == "__main__":

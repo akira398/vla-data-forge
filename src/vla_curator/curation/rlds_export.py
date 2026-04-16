@@ -277,28 +277,44 @@ class RLDSExporter(BaseExporter):
     """
     Export curated episodes to RLDS/TFDS TFRecord format.
 
-    Collects all episodes in memory via ``export_episode()``, then writes
-    both the ``full`` and ``reasoning_only`` TFDS datasets when
-    ``write_metadata()`` is called.
+    Parameters
+    ----------
+    output_dir : Path
+        Root output directory.
+    variants : list of str
+        Which dataset variants to write.  Any combination of:
+          ``"full"``           — all Bridge v2 episodes (default)
+          ``"reasoning_only"`` — only episodes with ECoT reasoning
+        Default: ``["full", "reasoning_only"]``
 
     Output layout:
         output_dir/
           vla_curated_dataset/
-            full/1.0.0/
-              dataset_info.json
-              features.json
-              vla_curated_dataset-train.tfrecord-00000-of-NNNNN
-              ...
-            reasoning_only/1.0.0/
-              dataset_info.json
-              features.json
-              vla_curated_dataset-train.tfrecord-00000-of-NNNNN
-              ...
+            full/1.0.0/              (if "full" in variants)
+            reasoning_only/1.0.0/    (if "reasoning_only" in variants)
     """
 
-    def __init__(self, output_dir: Path) -> None:
+    VALID_VARIANTS = ("full", "reasoning_only")
+
+    def __init__(
+        self,
+        output_dir: Path,
+        variants: Optional[List[str]] = None,
+    ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        if variants is None:
+            self.variants = list(self.VALID_VARIANTS)
+        else:
+            unknown = [v for v in variants if v not in self.VALID_VARIANTS]
+            if unknown:
+                raise ValueError(
+                    f"Unknown variant(s): {unknown}. "
+                    f"Choose from: {self.VALID_VARIANTS}"
+                )
+            self.variants = list(variants)
+
         self._episodes: List[InterleavedEpisode] = []
 
     # ------------------------------------------------------------------
@@ -381,18 +397,25 @@ class RLDSExporter(BaseExporter):
         written: Dict[str, int] = {}
 
         # ── full ─────────────────────────────────────────────────────────────
-        logger.info("Writing full dataset (%d episodes)…", total)
-        builder_full = builder_cls(config="full", data_dir=str(self.output_dir))
-        builder_full.download_and_prepare(download_config=dl_config)
-        written["full"] = total
-        logger.info(
-            "full → %s/vla_curated_dataset/full/1.0.0/  (%d episodes)",
-            self.output_dir,
-            total,
-        )
+        if "full" in self.variants:
+            logger.info("Writing full dataset (%d episodes)…", total)
+            builder_full = builder_cls(config="full", data_dir=str(self.output_dir))
+            builder_full.download_and_prepare(download_config=dl_config)
+            written["full"] = total
+            logger.info(
+                "full → %s/vla_curated_dataset/full/1.0.0/  (%d episodes)",
+                self.output_dir,
+                total,
+            )
+        else:
+            logger.info("Skipping full dataset (not requested).")
+            written["full"] = 0
 
         # ── reasoning_only ───────────────────────────────────────────────────
-        if n_with_reasoning == 0:
+        if "reasoning_only" not in self.variants:
+            logger.info("Skipping reasoning_only dataset (not requested).")
+            written["reasoning_only"] = 0
+        elif n_with_reasoning == 0:
             logger.warning(
                 "reasoning_only dataset skipped — no episodes matched ECoT paths.\n"
                 "  Check that --ecot-path points to the correct directory and that\n"

@@ -208,6 +208,6 @@ def create_exporter(
         return HDF5Exporter(output_dir)
     elif fmt == ExportFormat.RLDS:
         from .rlds_export import RLDSExporter
-        return RLDSExporter(output_dir)
+        return RLDSExporter(output_dir, variants=kwargs.get("variants"))
     else:
         raise ValueError(f"Unknown export format: {fmt!r}")
