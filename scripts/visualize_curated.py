@@ -302,7 +302,7 @@ def _save_step_figure(
     )
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=130, bbox_inches="tight",
+    fig.savefig(save_path, dpi=130,
                 facecolor="white", edgecolor="none")
     plt.close(fig)
 
