@@ -93,10 +93,11 @@ def _parse_entry(file_path: str, ep_id_str: str, entry: dict) -> ECoTEpisode:
     Parameters
     ----------
     file_path : str
-        Top-level JSON key — the .npy file path, used as the join key
-        with Bridge v2.
+        Top-level JSON key — the .npy file path (from Bridge v2
+        episode_metadata/file_path).
     ep_id_str : str
-        Second-level JSON key — the episode ID string (e.g. "43").
+        Second-level JSON key — the episode ID string (e.g. "43",
+        from Bridge v2 episode_metadata/episode_id).
     entry : dict
         The entry dict containing "metadata", "features", "reasoning".
     """
@@ -132,8 +133,12 @@ def _parse_entry(file_path: str, ep_id_str: str, entry: dict) -> ECoTEpisode:
             is_last=(i == n_steps - 1),
         ))
 
+    # Composite key matches the original ECoT format:
+    #   file_path + "_" + episode_id  (see MichalZawalski/embodied-CoT dataset.py)
+    composite_key = f"{file_path}_{ep_id_str}"
+
     return ECoTEpisode(
-        episode_id=file_path,           # file_path is the Bridge v2 join key
+        episode_id=composite_key,       # composite join key with Bridge v2
         language_instruction=instruction,
         steps=steps,
         metadata={

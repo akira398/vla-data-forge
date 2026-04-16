@@ -177,6 +177,7 @@ def _make_mock_episode(
     n_steps: int = 5,
     file_path: bytes = b"bridge_v2/path/to/traj",
     instruction: bytes = b"stack the blocks",
+    episode_id: int = 42,
 ) -> dict:
     steps = [
         _make_mock_step(
@@ -188,7 +189,10 @@ def _make_mock_episode(
     ]
     return {
         "steps": steps,
-        "episode_metadata": {"file_path": file_path},
+        "episode_metadata": {
+            "file_path": file_path,
+            "episode_id": np.int32(episode_id),
+        },
     }
 
 
@@ -208,6 +212,11 @@ class TestParseTfdsEpisode:
         ep = _parse_tfds_episode(raw, ep_index=0, image_size=None, include_secondary=False)
         assert ep.source_file == "bridge_v2/train/traj_001"
         assert ep.episode_id == "bridge_v2/train/traj_001"
+
+    def test_episode_num_read(self):
+        raw = _make_mock_episode(episode_id=99)
+        ep = _parse_tfds_episode(raw, ep_index=0, image_size=None, include_secondary=False)
+        assert ep.episode_num == 99
 
     def test_fallback_episode_id(self):
         raw = _make_mock_episode()

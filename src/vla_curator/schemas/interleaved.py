@@ -297,6 +297,9 @@ class InterleavedEpisode:
     """
 
     episode_id: str = ""
+    """Original Bridge v2 file_path (episode_metadata/file_path)."""
+    episode_num: Optional[int] = None
+    """Integer episode ID from Bridge v2 (episode_metadata/episode_id)."""
     task_description: str = ""
     steps: List[AlignedStep] = field(default_factory=list)
     alignment_metadata: AlignmentMetadata = field(default_factory=AlignmentMetadata)

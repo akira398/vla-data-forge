@@ -24,6 +24,7 @@ Both directories are loadable with ``tfds.builder_from_directory()``:
 Feature spec (Bridge v2 field names preserved, reasoning fields added):
 
   episode_metadata/file_path          bytes   original Bridge v2 path
+  episode_metadata/episode_id         int32   Bridge v2 per-file episode ID
   steps/observation/image_0           uint8   (480, 640, 3) JPEG
   steps/observation/image_1           uint8   (480, 640, 3) JPEG
   steps/observation/state             float32 (7,)
@@ -84,6 +85,7 @@ def _make_feature_spec():
     return tfds.features.FeaturesDict({
         "episode_metadata": tfds.features.FeaturesDict({
             "file_path": tfds.features.Text(),
+            "episode_id": tfds.features.Scalar(dtype=tf.int32),
         }),
         "steps": tfds.features.Dataset({
             "observation": tfds.features.FeaturesDict({
@@ -170,7 +172,10 @@ def _episode_to_dict(ep: InterleavedEpisode) -> dict:
         })
 
     return {
-        "episode_metadata": {"file_path": ep.episode_id},   # original path, unchanged
+        "episode_metadata": {
+            "file_path": ep.episode_id,                    # original Bridge v2 path
+            "episode_id": ep.episode_num if ep.episode_num is not None else -1,
+        },
         "steps": steps,
     }
 

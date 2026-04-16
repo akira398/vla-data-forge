@@ -14,7 +14,12 @@ import pytest
 
 from vla_curator.config import CurationConfig, ECoTDatasetConfig, BridgeV2DatasetConfig
 from vla_curator.curation.export import JSONLExporter
-from vla_curator.curation.interleaver import EpisodeInterleaver, _normalize_episode_id
+from vla_curator.curation.interleaver import (
+    EpisodeInterleaver,
+    _make_composite_key,
+    _normalize_episode_id,
+    _normalize_path,
+)
 from vla_curator.curation.validator import DatasetValidator, ValidationResult
 from vla_curator.datasets.base import DatasetReader
 from vla_curator.schemas.bridge_v2 import BridgeEpisode
@@ -166,8 +171,6 @@ class TestEpisodeInterleaver:
 
 class TestNormalizeEpisodeId:
     def test_leading_slash_stripped(self):
-        # Both Bridge v2 and ECoT store the same absolute NFS path;
-        # we only strip the leading slash so they compare as equal.
         path = "/nfs/s3_bucket/username/numpy_256/bridge_data_v2/env/task/ep/out.npy"
         result = _normalize_episode_id(path)
         assert result == "nfs/s3_bucket/username/numpy_256/bridge_data_v2/env/task/ep/out.npy"
@@ -177,7 +180,6 @@ class TestNormalizeEpisodeId:
         assert _normalize_episode_id(path) == path
 
     def test_same_absolute_path_matches(self):
-        # Simulates Bridge v2 source_file == ECoT top-level key (same absolute path)
         abs_path = "/nfs/mount/numpy_256/bridge_data_v2/env/task/ep/out.npy"
         assert _normalize_episode_id(abs_path) == _normalize_episode_id(abs_path)
 
@@ -191,6 +193,19 @@ class TestNormalizeEpisodeId:
         path = "nfs\\mount\\bridge_data_v2\\env\\task\\ep\\out.npy"
         result = _normalize_episode_id(path)
         assert "\\" not in result
+
+    def test_composite_key_format(self):
+        key = _make_composite_key("/nfs/data/out.npy", 42)
+        assert key == "nfs/data/out.npy_42"
+
+    def test_composite_key_matches_ecot_format(self):
+        """Composite key from Bridge v2 should match the normalised ECoT episode_id."""
+        file_path = "/nfs/data/bridge_data_v2/env/task/ep/out.npy"
+        episode_id = 99
+        bridge_key = _make_composite_key(file_path, episode_id)
+        ecot_composite = f"{file_path}_{episode_id}"
+        ecot_key = _normalize_path(ecot_composite)
+        assert bridge_key == ecot_key
 
 
 # ---------------------------------------------------------------------------

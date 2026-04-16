@@ -284,10 +284,14 @@ def _parse_tfds_episode(
     """Convert one RLDS episode to a BridgeEpisode."""
     # --- Episode metadata ---
     source_file: Optional[str] = None
+    episode_num: Optional[int] = None
     if "episode_metadata" in ep:
         fp_raw = ep["episode_metadata"].get("file_path")
         if fp_raw is not None:
             source_file = _decode_bytes(fp_raw) or None
+        eid_raw = ep["episode_metadata"].get("episode_id")
+        if eid_raw is not None:
+            episode_num = int(_tensor_to_numpy(eid_raw))
 
     episode_id = source_file or f"bridge_ep_{ep_index:06d}"
 
@@ -309,6 +313,7 @@ def _parse_tfds_episode(
         episode_id=episode_id,
         language_instruction=instruction,
         steps=steps,
+        episode_num=episode_num,
         source_file=source_file,
     )
 

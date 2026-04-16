@@ -68,9 +68,13 @@ def sample_ecot_episode(sample_reasoning: ReasoningTrace) -> ECoTEpisode:
         )
         steps.append(step)
     return ECoTEpisode(
-        episode_id="test_episode_001",
+        episode_id="test_episode_001_42",   # composite key: file_path + "_" + episode_id
         language_instruction="Pick up the red cube and place it in the bowl.",
         steps=steps,
+        metadata={
+            "ecot_episode_id": "42",
+            "file_path": "test_episode_001",
+        },
         source_dataset="embodied_features_bridge",
     )
 
@@ -99,6 +103,7 @@ def sample_bridge_episode() -> BridgeEpisode:
         language_instruction="Pick up the red cube and place it in the bowl.",
         steps=steps,
         source_file="test_episode_001",
+        episode_num=42,
     )
 
 

@@ -67,19 +67,33 @@ def _bridge_obs_to_enriched(obs: BridgeObservation) -> EnrichedObservation:
     )
 
 
+def _normalize_path(path: str) -> str:
+    """Strip leading slash and normalise backslashes for cross-platform safety."""
+    return path.replace("\\", "/").lstrip("/")
+
+
+def _make_composite_key(file_path: str, episode_num: int) -> str:
+    """
+    Build the composite join key for ECoT ↔ Bridge v2 matching.
+
+    Format matches the original ECoT codebase (MichalZawalski/embodied-CoT):
+        file_path + "_" + str(episode_id)
+
+    Both sides (ECoT JSON and Bridge v2 TFDS) store the same absolute NFS
+    path in ``file_path`` and a per-file integer ``episode_id``.
+    """
+    return f"{_normalize_path(file_path)}_{episode_num}"
+
+
 def _normalize_episode_id(ep_id: str, source_file: Optional[str] = None) -> str:
     """
     Produce a normalised identifier for episode matching.
 
-    Both Bridge v2 (episode_metadata/file_path) and ECoT (top-level JSON key)
-    store the same absolute NFS path, e.g.:
-      /nfs/s3_bucket/.../numpy_256/bridge_data_v2/env/task/ep/split/out.npy
-
-    We only strip the leading slash so both sides compare as equal strings.
-    Backslashes are normalised to forward slashes for cross-platform safety.
+    This is the legacy path-only normalisation, kept as a fallback for
+    episodes that lack an integer episode_id.
     """
     candidate = source_file or ep_id
-    return candidate.replace("\\", "/").lstrip("/")
+    return _normalize_path(candidate)
 
 
 # ---------------------------------------------------------------------------
@@ -91,17 +105,20 @@ def _build_bridge_index(
     bridge_reader: DatasetReader[BridgeEpisode],
 ) -> Dict[str, BridgeEpisode]:
     """
-    Load all Bridge v2 episodes into a dict keyed by normalised ID.
+    Load all Bridge v2 episodes into a dict keyed by composite key.
 
-    For very large datasets you would instead build an on-disk index,
-    but for research-scale usage loading into memory is acceptable.
+    Primary key: ``file_path + "_" + episode_id`` (composite).
+    Fallback key: normalised ``file_path`` only (for legacy compatibility).
     """
     index: Dict[str, BridgeEpisode] = {}
     for ep in bridge_reader:
-        key = _normalize_episode_id(ep.episode_id, ep.source_file)
-        index[key] = ep
-        # Also index by bare episode_id in case source_file is absent
-        index[_normalize_episode_id(ep.episode_id)] = ep
+        # Primary: composite key
+        if ep.source_file and ep.episode_num is not None:
+            composite = _make_composite_key(ep.source_file, ep.episode_num)
+            index[composite] = ep
+        # Fallback: path-only key
+        path_key = _normalize_episode_id(ep.episode_id, ep.source_file)
+        index[path_key] = ep
     logger.info("Bridge index: %d episodes loaded.", len({id(v) for v in index.values()}))
     return index
 
@@ -271,6 +288,7 @@ class EpisodeInterleaver:
 
         return InterleavedEpisode(
             episode_id=bridge_ep.episode_id,
+            episode_num=bridge_ep.episode_num,
             task_description=(
                 bridge_ep.language_instruction or ecot_ep.language_instruction
             ),
@@ -302,15 +320,12 @@ class EpisodeInterleaver:
         stats = {"matched": 0, "unmatched": 0, "errors": 0}
 
         for bridge_ep in self.bridge_reader:
-            # Normalise the Bridge v2 key to find a matching ECoT episode
-            key = _normalize_episode_id(bridge_ep.episode_id, bridge_ep.source_file)
-            ecot_ep = ecot_index.get(key)
+            ecot_ep = None
 
-            # Also try the raw source_file if the normalised key didn't match
-            if ecot_ep is None and bridge_ep.source_file:
-                ecot_ep = ecot_index.get(
-                    _normalize_episode_id(bridge_ep.source_file)
-                )
+            # Primary: composite key  file_path + "_" + episode_id
+            if bridge_ep.source_file and bridge_ep.episode_num is not None:
+                key = _make_composite_key(bridge_ep.source_file, bridge_ep.episode_num)
+                ecot_ep = ecot_index.get(key)
 
             if ecot_ep is not None:
                 try:
@@ -336,22 +351,21 @@ class EpisodeInterleaver:
 
     def _build_ecot_index(self) -> _ECoTIndex:
         """
-        Build an in-memory lookup table of ECoT episodes keyed by normalised
-        file path.
+        Build an in-memory lookup table of ECoT episodes keyed by the
+        normalised composite key ``file_path + "_" + episode_id``.
 
-        ECoT is loaded from a single JSON file so the full dataset fits in RAM.
-        We index each episode under its normalised path AND its raw path to
-        maximise the chance of a match regardless of normalisation differences.
+        This matches the original ECoT codebase key format used during
+        both annotation generation and training-time lookup.
+
+        The composite key is built in :func:`_parse_entry` and stored as
+        ``ECoTEpisode.episode_id``; here we just normalise the path
+        component (strip leading slash, normalise backslashes).
         """
         index: _ECoTIndex = {}
         for ep in self.ecot_reader:
-            # Normalised key (strips /nfs/.../numpy_256/ prefix)
-            norm_key = _normalize_episode_id(ep.episode_id)
+            # ep.episode_id is already "file_path_episode_id" from _parse_entry
+            norm_key = _normalize_path(ep.episode_id)
             index[norm_key] = ep
-            # Raw path (leading slash stripped) as fallback
-            raw_key = ep.episode_id.replace("\\", "/").lstrip("/")
-            if raw_key != norm_key:
-                index[raw_key] = ep
         return index
 
     def _bridge_ep_empty(self, bridge_ep: BridgeEpisode) -> InterleavedEpisode:
@@ -389,6 +403,7 @@ class EpisodeInterleaver:
 
         return InterleavedEpisode(
             episode_id=bridge_ep.episode_id,   # original path preserved
+            episode_num=bridge_ep.episode_num,
             task_description=bridge_ep.language_instruction or "",
             steps=aligned_steps,
             alignment_metadata=alignment_meta,
@@ -410,27 +425,21 @@ class EpisodeInterleaver:
         """
         Look up the Bridge v2 episode corresponding to an ECoT episode.
 
-        Tries several key formats to handle path normalisation differences
-        between how ECoT stored the source file and how Bridge v2 was indexed.
+        Primary lookup: composite key ``file_path + "_" + episode_id``
+        (normalised).  Falls back to path-only matching for legacy data.
         """
         idx = self.bridge_index
 
-        # Direct match
-        key = _normalize_episode_id(ecot_ep.episode_id)
-        if key in idx:
-            return idx[key]
+        # Primary: composite key (ecot_ep.episode_id is "file_path_episode_id")
+        composite_key = _normalize_path(ecot_ep.episode_id)
+        if composite_key in idx:
+            return idx[composite_key]
 
-        # Match via metadata file_path (ECoT stores the raw NFS path here)
+        # Fallback: path-only match via metadata file_path
         source_file = ecot_ep.metadata.get("file_path")
         if source_file:
-            norm_src = _normalize_episode_id(str(source_file))
-            if norm_src in idx:
-                return idx[norm_src]
-
-        # Fuzzy: basename match
-        ep_basename = ecot_ep.episode_id.rstrip("/").split("/")[-1]
-        for k, v in idx.items():
-            if k.endswith(ep_basename) or k.endswith(ep_basename + ".hdf5"):
-                return v
+            path_key = _normalize_path(str(source_file))
+            if path_key in idx:
+                return idx[path_key]
 
         return None

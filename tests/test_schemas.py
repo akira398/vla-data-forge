@@ -107,7 +107,7 @@ class TestECoTEpisode:
 
     def test_to_dict_no_images(self, sample_ecot_episode):
         d = sample_ecot_episode.to_dict(include_images=False)
-        assert d["episode_id"] == "test_episode_001"
+        assert d["episode_id"] == "test_episode_001_42"
         assert len(d["steps"]) == 10
         # Images should not be in the output
         for step in d["steps"]:

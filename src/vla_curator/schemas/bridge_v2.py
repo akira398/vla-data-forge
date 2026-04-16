@@ -149,7 +149,10 @@ class BridgeEpisode:
     steps: List[BridgeStep] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     source_file: Optional[str] = None
-    """Path in the Bridge v2 archive — used as join key with ECoT."""
+    """Path in the Bridge v2 archive — used as part of join key with ECoT."""
+    episode_num: Optional[int] = None
+    """Integer episode ID from episode_metadata/episode_id in Bridge v2 TFDS.
+    Together with source_file, forms the composite join key with ECoT."""
 
     # ------------------------------------------------------------------
     # Sequence protocol
