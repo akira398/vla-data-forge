@@ -219,7 +219,7 @@ def _save_step_figure(
     action_str = (
         f"Δxyz  [{act[0]:+.3f}, {act[1]:+.3f}, {act[2]:+.3f}]\n"
         f"Δrpy  [{act[3]:+.3f}, {act[4]:+.3f}, {act[5]:+.3f}]\n"
-        f"grip   {act[6]:.3f}  ({'CLOSE' if act[6] > 0.5 else 'OPEN '})"
+        f"grip   {act[6]:.3f}  ({'OPEN ' if act[6] > 0.5 else 'CLOSE'})"
     )
 
     sections = [
@@ -364,6 +364,28 @@ def _visualize_split(
             console.print(f"  {i+1}/{total}")
 
     console.print(f"[green]Done.[/green]  {total} PNGs → {ep_dir}")
+
+    # Assemble video (1 fps)
+    _make_video(ep_dir, total)
+
+
+# ---------------------------------------------------------------------------
+# Video assembly
+# ---------------------------------------------------------------------------
+
+
+def _make_video(ep_dir: Path, num_frames: int) -> None:
+    """Stitch step_*.png files into an MP4 video at 1 fps."""
+    import imageio.v3 as iio
+
+    png_paths = sorted(ep_dir.glob("step_*.png"))
+    if len(png_paths) < 2:
+        return
+
+    video_path = ep_dir / "episode.mp4"
+    frames = [iio.imread(p) for p in png_paths]
+    iio.imwrite(video_path, frames, fps=1, codec="libx264")
+    console.print(f"  Video → [bold]{video_path}[/bold]")
 
 
 # ---------------------------------------------------------------------------
