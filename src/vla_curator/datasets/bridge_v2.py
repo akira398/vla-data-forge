@@ -49,8 +49,8 @@ Each step:
     observation/image_2                 (480, 640, 3) uint8   (may be zeros)
     observation/image_3                 (480, 640, 3) uint8   (may be zeros)
     observation/state                   (7,) float32
-    observation/language_instruction    bytes
     action                              (7,) float32
+    language_instruction                bytes   (at step level, not inside observation)
     is_first / is_last / is_terminal    bool
     reward / discount                   float32
 
@@ -249,12 +249,9 @@ def _parse_tfds_step(
         logger.warning("Step %d has no action — using zeros.", step_index)
 
     # --- Language instruction ---
-    # Bridge v2 TFDS stores language_instruction inside observation.
-    # Fall back to step level for other RLDS datasets that put it there.
-    raw_instruction = obs.get("language_instruction")
-    if raw_instruction is None:
-        raw_instruction = step.get("language_instruction", b"")
-    instruction = _decode_bytes(raw_instruction)
+    # Bridge v2 TFDS stores language_instruction at the step level (sibling to
+    # observation and action), not inside observation.
+    instruction = _decode_bytes(step.get("language_instruction", b""))
 
     # --- Flags (TF bool tensors — bool() works fine on scalars in eager mode) ---
     def _to_bool(val: Any, default: bool) -> bool:
