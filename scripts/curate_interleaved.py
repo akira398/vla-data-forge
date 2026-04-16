@@ -126,8 +126,11 @@ def main(
     if config_file:
         cfg = load_config(config_file, CurationConfig)
         if max_episodes is not None:
-            cfg.ecot.max_episodes = max_episodes
+            # Only limit Bridge v2 — ECoT is a lookup table and must be
+            # loaded in full, otherwise most Bridge episodes won't find
+            # their ECoT match (different iteration order).
             cfg.bridge.max_episodes = max_episodes
+            cfg.ecot.max_episodes = None
         if ecot_path is not None:
             cfg.ecot.local_path = ecot_path
         if bridge_path is not None:
@@ -135,7 +138,8 @@ def main(
     else:
         ecot_cfg = ECoTDatasetConfig(
             local_path=ecot_path,
-            max_episodes=max_episodes,
+            # No max_episodes — ECoT is loaded as a lookup index, so all
+            # entries are needed for matching regardless of Bridge v2 limit.
         )
         bridge_cfg = BridgeV2DatasetConfig(
             source=bridge_source,
