@@ -102,6 +102,12 @@ class EnrichedObservation(NumpyArrayMixin):
     image_secondary: Optional[np.ndarray] = None
     image_secondary_path: Optional[str] = None
 
+    # Additional cameras (from Bridge v2)
+    image_tertiary: Optional[np.ndarray] = None
+    image_tertiary_path: Optional[str] = None
+    image_quaternary: Optional[np.ndarray] = None
+    image_quaternary_path: Optional[str] = None
+
     # Proprioception
     state: Optional[np.ndarray] = None        # (7,) float32
 
@@ -185,6 +191,9 @@ class AlignedStep(NumpyArrayMixin):
     reasoning: Optional[ReasoningTrace] = None
     is_first: bool = False
     is_last: bool = False
+    is_terminal: bool = False
+    reward: float = 0.0
+    discount: float = 1.0
     source_dataset: str = ""
     alignment_confidence: float = 1.0
     """
@@ -192,6 +201,15 @@ class AlignedStep(NumpyArrayMixin):
     this observation.  1.0 = direct annotation; < 1.0 = propagated from a
     neighbouring annotated step.
     """
+
+    # Bridge v2 step-level fields
+    language_embedding: Optional[np.ndarray] = None  # (512,) float32
+
+    # ECoT per-step features
+    move_primitive: str = ""
+    gripper_position: Optional[np.ndarray] = None  # (2,) float32
+    bboxes: Any = None
+    state_3d: Optional[np.ndarray] = None  # (3,) float32
 
     def robot_action(self) -> RobotAction:
         return RobotAction.from_numpy(self.action)
@@ -305,6 +323,16 @@ class InterleavedEpisode:
     alignment_metadata: AlignmentMetadata = field(default_factory=AlignmentMetadata)
     provenance: DataProvenance = field(default_factory=DataProvenance)
     schema_version: str = "1.0"
+
+    # Bridge v2 episode metadata flags
+    has_image_0: bool = True
+    has_image_1: bool = False
+    has_image_2: bool = False
+    has_image_3: bool = False
+    has_language: bool = False
+
+    # ECoT episode-level fields
+    caption: str = ""
 
     # ------------------------------------------------------------------
     # Sequence protocol

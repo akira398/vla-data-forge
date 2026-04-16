@@ -73,16 +73,11 @@ def _parse_reasoning(r: dict) -> ReasoningTrace:
     """Convert one reasoning dict (for a single step) into a ReasoningTrace."""
     return ReasoningTrace(
         task_reasoning=r.get("task") or "",
-        subtask_reasoning=r.get("subtask_reason") or "",
-        move_reasoning=r.get("move_reason") or "",
-        gripper_reasoning="",   # not present in this dataset
-        attribute_reasoning="", # not present in this dataset
-        spatial_reasoning="",   # not present in this dataset
-        extra={
-            "plan":    r.get("plan") or "",
-            "subtask": r.get("subtask") or "",
-            "move":    r.get("move") or "",
-        },
+        plan=r.get("plan") or "",
+        subtask_reasoning=r.get("subtask") or "",
+        subtask_reason=r.get("subtask_reason") or "",
+        move_reasoning=r.get("move") or "",
+        move_reason=r.get("move_reason") or "",
     )
 
 
@@ -110,7 +105,9 @@ def _parse_entry(file_path: str, ep_id_str: str, entry: dict) -> ECoTEpisode:
     caption = metadata.get("caption") or ""
 
     move_primitives = features.get("move_primitive") or []
-    gripper_positions = features.get("gripper_positions") or []
+    # Try both key variants (singular and plural)
+    gripper_positions = features.get("gripper_position") or features.get("gripper_positions") or []
+    bboxes_list = features.get("bboxes") or []
     state_3d = features.get("state_3d") or []
 
     steps: List[ECoTStep] = []
@@ -119,10 +116,15 @@ def _parse_entry(file_path: str, ep_id_str: str, entry: dict) -> ECoTEpisode:
         raw_r = reasoning_dict.get(str(i))
         reasoning = _parse_reasoning(raw_r) if raw_r else None
 
-        # State: 3D end-effector position for this step
-        state = None
-        if i < len(state_3d):
-            state = np.array(state_3d[i], dtype=np.float32)
+        # Per-step ECoT features
+        move_prim = move_primitives[i] if i < len(move_primitives) else ""
+        grip_pos = None
+        if i < len(gripper_positions) and gripper_positions[i] is not None:
+            grip_pos = np.array(gripper_positions[i], dtype=np.float32).flatten()[:2]
+        bbox = bboxes_list[i] if i < len(bboxes_list) else None
+        s3d = None
+        if i < len(state_3d) and state_3d[i] is not None:
+            s3d = np.array(state_3d[i], dtype=np.float32).flatten()[:3]
 
         steps.append(ECoTStep(
             step_index=i,
@@ -131,6 +133,10 @@ def _parse_entry(file_path: str, ep_id_str: str, entry: dict) -> ECoTEpisode:
             reasoning=reasoning,
             is_first=(i == 0),
             is_last=(i == n_steps - 1),
+            move_primitive=move_prim if isinstance(move_prim, str) else str(move_prim),
+            gripper_position=grip_pos,
+            bboxes=bbox,
+            state_3d=s3d,
         ))
 
     # Composite key matches the original ECoT format:

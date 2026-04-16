@@ -55,11 +55,20 @@ class ReasoningTrace:
     task_reasoning: Optional[str] = None
     """High-level task description: what the robot is trying to accomplish overall."""
 
+    plan: Optional[str] = None
+    """Multi-step plan for the trajectory."""
+
     subtask_reasoning: Optional[str] = None
-    """Intermediate subtask: the specific goal for this phase of the trajectory."""
+    """Intermediate subtask label: the specific goal for this phase of the trajectory."""
+
+    subtask_reason: Optional[str] = None
+    """Why this subtask was chosen."""
 
     move_reasoning: Optional[str] = None
-    """Arm motion rationale: which direction/distance to move and why."""
+    """Arm motion description: which direction/distance to move."""
+
+    move_reason: Optional[str] = None
+    """Why this motion was chosen."""
 
     gripper_reasoning: Optional[str] = None
     """Gripper state rationale: open/close decision and why."""
@@ -81,13 +90,15 @@ class ReasoningTrace:
     # ------------------------------------------------------------------
 
     def is_complete(self) -> bool:
-        """True if the four primary reasoning fields are all non-empty."""
+        """True if the six primary ECoT reasoning fields are all non-empty."""
         return all(
             [
                 self.task_reasoning,
+                self.plan,
                 self.subtask_reasoning,
+                self.subtask_reason,
                 self.move_reasoning,
-                self.gripper_reasoning,
+                self.move_reason,
             ]
         )
 
@@ -96,8 +107,11 @@ class ReasoningTrace:
         return not any(
             [
                 self.task_reasoning,
+                self.plan,
                 self.subtask_reasoning,
+                self.subtask_reason,
                 self.move_reasoning,
+                self.move_reason,
                 self.gripper_reasoning,
                 self.attribute_reasoning,
                 self.spatial_reasoning,
@@ -108,8 +122,11 @@ class ReasoningTrace:
         """Return names of fields that have been populated."""
         candidates = [
             "task_reasoning",
+            "plan",
             "subtask_reasoning",
+            "subtask_reason",
             "move_reasoning",
+            "move_reason",
             "gripper_reasoning",
             "attribute_reasoning",
             "spatial_reasoning",
@@ -119,8 +136,11 @@ class ReasoningTrace:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "task_reasoning": self.task_reasoning,
+            "plan": self.plan,
             "subtask_reasoning": self.subtask_reasoning,
+            "subtask_reason": self.subtask_reason,
             "move_reasoning": self.move_reasoning,
+            "move_reason": self.move_reason,
             "gripper_reasoning": self.gripper_reasoning,
             "attribute_reasoning": self.attribute_reasoning,
             "spatial_reasoning": self.spatial_reasoning,
@@ -131,8 +151,11 @@ class ReasoningTrace:
     def from_dict(cls, d: Dict[str, Any]) -> "ReasoningTrace":
         return cls(
             task_reasoning=d.get("task_reasoning"),
+            plan=d.get("plan"),
             subtask_reasoning=d.get("subtask_reasoning"),
+            subtask_reason=d.get("subtask_reason"),
             move_reasoning=d.get("move_reasoning"),
+            move_reason=d.get("move_reason"),
             gripper_reasoning=d.get("gripper_reasoning"),
             attribute_reasoning=d.get("attribute_reasoning"),
             spatial_reasoning=d.get("spatial_reasoning"),
@@ -194,6 +217,12 @@ class ECoTStep(NumpyArrayMixin):
     reasoning: Optional[ReasoningTrace] = None
     is_first: bool = False
     is_last: bool = False
+
+    # Per-step ECoT features
+    move_primitive: str = ""
+    gripper_position: Optional[np.ndarray] = None  # (2,) float32 pixel [x,y]
+    bboxes: Any = None  # Variable-length list of bounding boxes
+    state_3d: Optional[np.ndarray] = None  # (3,) float32 end-effector [x,y,z]
 
     def robot_action(self) -> RobotAction:
         """Return action as a named RobotAction object."""

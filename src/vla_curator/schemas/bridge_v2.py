@@ -48,8 +48,12 @@ class BridgeObservation(NumpyArrayMixin):
     step_index: int = 0
     image_0: Optional[np.ndarray] = None       # (H, W, 3) uint8 — primary view
     image_1: Optional[np.ndarray] = None       # (H, W, 3) uint8 — secondary view
+    image_2: Optional[np.ndarray] = None       # (H, W, 3) uint8 — tertiary view
+    image_3: Optional[np.ndarray] = None       # (H, W, 3) uint8 — quaternary view
     image_0_path: Optional[str] = None
     image_1_path: Optional[str] = None
+    image_2_path: Optional[str] = None
+    image_3_path: Optional[str] = None
     state: Optional[np.ndarray] = None         # (7,) float32 proprioception
 
     def load_image_0(self) -> Optional[np.ndarray]:
@@ -107,6 +111,7 @@ class BridgeStep(NumpyArrayMixin):
     Instruction is stored per-step because RLDS encodes it that way.
     In practice it is identical across all steps of an episode.
     """
+    language_embedding: Optional[np.ndarray] = None  # (512,) float32 USE encoder embedding
     is_first: bool = False
     is_last: bool = False
     is_terminal: bool = False
@@ -153,6 +158,11 @@ class BridgeEpisode:
     episode_num: Optional[int] = None
     """Integer episode ID from episode_metadata/episode_id in Bridge v2 TFDS.
     Together with source_file, forms the composite join key with ECoT."""
+    has_image_0: bool = True
+    has_image_1: bool = False
+    has_image_2: bool = False
+    has_image_3: bool = False
+    has_language: bool = False
 
     # ------------------------------------------------------------------
     # Sequence protocol

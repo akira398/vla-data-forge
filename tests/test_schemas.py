@@ -63,7 +63,10 @@ class TestReasoningTrace:
         fields = sample_reasoning.filled_fields()
         assert "task_reasoning" in fields
         assert "move_reasoning" in fields
-        assert len(fields) == 6
+        assert "plan" in fields
+        assert "subtask_reason" in fields
+        assert "move_reason" in fields
+        assert len(fields) == 9
 
     def test_to_dict_roundtrip(self, sample_reasoning):
         d = sample_reasoning.to_dict()

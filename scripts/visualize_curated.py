@@ -99,13 +99,22 @@ def _parse_steps(episode) -> list[dict]:
     steps = []
     for step in episode["steps"]:
         obs = step["observation"]
+        reasoning = step["reasoning"]
+        ecot = step["ecot_features"]
         steps.append({
             "image_0":            _arr(obs["image_0"]).astype(np.uint8),
             "image_1":            _arr(obs["image_1"]).astype(np.uint8),
             "language_instruction": _t(step["language_instruction"]),
-            "task_reasoning":     _t(obs["task_reasoning"]),
-            "subtask_reasoning":  _t(obs["subtask_reasoning"]),
-            "move_reasoning":     _t(obs["move_reasoning"]),
+            # ECoT reasoning (6 fields)
+            "task":               _t(reasoning["task"]),
+            "plan":               _t(reasoning["plan"]),
+            "subtask":            _t(reasoning["subtask"]),
+            "subtask_reason":     _t(reasoning["subtask_reason"]),
+            "move":               _t(reasoning["move"]),
+            "move_reason":        _t(reasoning["move_reason"]),
+            # ECoT features
+            "caption":            _t(ecot["caption"]),
+            "move_primitive":     _t(ecot["move_primitive"]),
             "action":             _arr(step["action"]).astype(np.float32),
             "is_first":           bool(_arr(step["is_first"])),
             "is_last":            bool(_arr(step["is_last"])),
@@ -151,7 +160,7 @@ def _save_step_figure(
     save_path: Path,
     split: str = "",
 ) -> None:
-    fig = plt.figure(figsize=(14, 5.5), facecolor="white")
+    fig = plt.figure(figsize=(14, 8), facecolor="white")
 
     task = step["language_instruction"] or "—"
     flags = []
@@ -223,15 +232,24 @@ def _save_step_figure(
     )
 
     sections = [
-        ("Task reasoning",    step["task_reasoning"],    "#1a1a1a"),
-        ("Subtask reasoning", step["subtask_reasoning"], "#1a1a1a"),
-        ("Move reasoning",    step["move_reasoning"],    "#1a1a1a"),
+        ("Task",           step["task"],           "#1a1a1a"),
+        ("Plan",           step["plan"],           "#1a1a1a"),
+        ("Subtask",        step["subtask"],        "#1a1a1a"),
+        ("Subtask reason", step["subtask_reason"], "#1a1a1a"),
+        ("Move",           step["move"],           "#1a1a1a"),
+        ("Move reason",    step["move_reason"],    "#1a1a1a"),
     ]
 
+    # Add caption and move_primitive if present
+    if step.get("caption"):
+        sections.insert(0, ("Caption", step["caption"], "#555555"))
+    if step.get("move_primitive"):
+        sections.append(("Move primitive", step["move_primitive"], "#555555"))
+
     y = 0.97
-    LINE_H  = 0.055   # per text line
-    LABEL_H = 0.065   # label row height
-    GAP     = 0.025   # gap between sections
+    LINE_H  = 0.040   # per text line (smaller to fit more sections)
+    LABEL_H = 0.050   # label row height
+    GAP     = 0.015   # gap between sections
 
     for label, text, color in sections:
         wrapped = _wrap(text, width=52)
@@ -338,7 +356,7 @@ def _visualize_split(
     total = len(steps)
 
     # Console summary
-    n_with_r = sum(1 for s in steps if s["task_reasoning"])
+    n_with_r = sum(1 for s in steps if s["task"])
     conf_vals = [s["alignment_confidence"] for s in steps]
 
     t = Table(title=f"Episode {episode_index} ({split})", show_lines=True)

@@ -44,8 +44,11 @@ def make_action(seed: int = 0) -> np.ndarray:
 def sample_reasoning() -> ReasoningTrace:
     return ReasoningTrace(
         task_reasoning="Pick up the red cube and place it in the bowl.",
+        plan="1. Move to cube 2. Grasp cube 3. Move to bowl 4. Release",
         subtask_reasoning="Move the arm toward the red cube.",
+        subtask_reason="The cube needs to be grasped first before placing.",
         move_reasoning="Move end-effector left and down by 5cm.",
+        move_reason="The cube is to the left and below the current position.",
         gripper_reasoning="Keep gripper open to approach the object.",
         attribute_reasoning="The cube is red, small, and located on the left side.",
         spatial_reasoning="End-effector is 10cm above and right of the cube.",

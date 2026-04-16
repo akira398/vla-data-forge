@@ -61,6 +61,10 @@ def _bridge_obs_to_enriched(obs: BridgeObservation) -> EnrichedObservation:
         image_path=obs.image_0_path,
         image_secondary=obs.image_1,
         image_secondary_path=obs.image_1_path,
+        image_tertiary=obs.image_2,
+        image_tertiary_path=obs.image_2_path,
+        image_quaternary=obs.image_3,
+        image_quaternary_path=obs.image_3_path,
         state=obs.state,
         depth_map=DepthMap(valid=False),
         scene_graph=SceneGraph(valid=False),
@@ -235,6 +239,9 @@ class EpisodeInterleaver:
             sparse_reasoning, num_bridge_steps
         )
 
+        # Build ECoT step index for per-step feature lookup
+        ecot_step_map = {s.step_index: s for s in ecot_ep.steps}
+
         # Build AlignedStep list
         aligned_steps: List[AlignedStep] = []
         for bridge_step, trace in zip(bridge_ep.steps, dense_traces):
@@ -247,6 +254,9 @@ class EpisodeInterleaver:
                 0.7 if trace is not None else 0.0
             )
 
+            # ECoT per-step features (if this step has a corresponding ECoT step)
+            ecot_step = ecot_step_map.get(bridge_step.step_index)
+
             aligned = AlignedStep(
                 step_index=bridge_step.step_index,
                 observation=enriched_obs,
@@ -254,8 +264,16 @@ class EpisodeInterleaver:
                 reasoning=trace,
                 is_first=bridge_step.is_first,
                 is_last=bridge_step.is_last,
+                is_terminal=bridge_step.is_terminal,
+                reward=bridge_step.reward,
+                discount=bridge_step.discount,
                 source_dataset="bridge_v2",
                 alignment_confidence=confidence,
+                language_embedding=bridge_step.language_embedding,
+                move_primitive=ecot_step.move_primitive if ecot_step else "",
+                gripper_position=ecot_step.gripper_position if ecot_step else None,
+                bboxes=ecot_step.bboxes if ecot_step else None,
+                state_3d=ecot_step.state_3d if ecot_step else None,
             )
             aligned_steps.append(aligned)
 
@@ -296,6 +314,12 @@ class EpisodeInterleaver:
             alignment_metadata=alignment_meta,
             provenance=provenance,
             schema_version=self.config.schema_version,
+            has_image_0=bridge_ep.has_image_0,
+            has_image_1=bridge_ep.has_image_1,
+            has_image_2=bridge_ep.has_image_2,
+            has_image_3=bridge_ep.has_image_3,
+            has_language=bridge_ep.has_language,
+            caption=ecot_ep.metadata.get("caption", ""),
         )
 
     # ------------------------------------------------------------------

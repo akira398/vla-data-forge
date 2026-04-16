@@ -219,11 +219,19 @@ def _parse_tfds_step(
     img0 = _decode_tf_image(img0_raw, image_size)
 
     img1 = None
+    img2 = None
+    img3 = None
     if include_secondary:
         img1_raw = _get_obs_image(obs, "image_1")
         if img1_raw is None:
             img1_raw = _get_obs_image(obs, "images1")
         img1 = _decode_tf_image(img1_raw, image_size)
+
+        img2_raw = _get_obs_image(obs, "image_2")
+        img2 = _decode_tf_image(img2_raw, image_size)
+
+        img3_raw = _get_obs_image(obs, "image_3")
+        img3 = _decode_tf_image(img3_raw, image_size)
 
     # --- State ---
     state_raw = obs.get("state")
@@ -237,6 +245,8 @@ def _parse_tfds_step(
         step_index=step_index,
         image_0=img0,
         image_1=img1,
+        image_2=img2,
+        image_3=img3,
         state=state,
     )
 
@@ -253,6 +263,14 @@ def _parse_tfds_step(
     # observation and action), not inside observation.
     instruction = _decode_bytes(step.get("language_instruction", b""))
 
+    # --- Language embedding ---
+    lang_emb_raw = step.get("language_embedding")
+    language_embedding: Optional[np.ndarray] = None
+    if lang_emb_raw is not None:
+        language_embedding = np.asarray(
+            _tensor_to_numpy(lang_emb_raw), dtype=np.float32
+        ).flatten()
+
     # --- Flags (TF bool tensors — bool() works fine on scalars in eager mode) ---
     def _to_bool(val: Any, default: bool) -> bool:
         if val is None:
@@ -267,6 +285,7 @@ def _parse_tfds_step(
         observation=obs_obj,
         action=action,
         language_instruction=instruction,
+        language_embedding=language_embedding,
         is_first=_to_bool(step.get("is_first"), step_index == 0),
         is_last=_to_bool(step.get("is_last"), False),
         is_terminal=_to_bool(step.get("is_terminal"), False),
@@ -285,13 +304,34 @@ def _parse_tfds_episode(
     # --- Episode metadata ---
     source_file: Optional[str] = None
     episode_num: Optional[int] = None
+    has_image_0 = True
+    has_image_1 = False
+    has_image_2 = False
+    has_image_3 = False
+    has_language = False
     if "episode_metadata" in ep:
-        fp_raw = ep["episode_metadata"].get("file_path")
+        meta = ep["episode_metadata"]
+        fp_raw = meta.get("file_path")
         if fp_raw is not None:
             source_file = _decode_bytes(fp_raw) or None
-        eid_raw = ep["episode_metadata"].get("episode_id")
+        eid_raw = meta.get("episode_id")
         if eid_raw is not None:
             episode_num = int(_tensor_to_numpy(eid_raw))
+
+        def _meta_bool(key: str, default: bool) -> bool:
+            v = meta.get(key)
+            if v is None:
+                return default
+            try:
+                return bool(_tensor_to_numpy(v))
+            except Exception:
+                return default
+
+        has_image_0 = _meta_bool("has_image_0", True)
+        has_image_1 = _meta_bool("has_image_1", False)
+        has_image_2 = _meta_bool("has_image_2", False)
+        has_image_3 = _meta_bool("has_image_3", False)
+        has_language = _meta_bool("has_language", False)
 
     episode_id = source_file or f"bridge_ep_{ep_index:06d}"
 
@@ -315,6 +355,11 @@ def _parse_tfds_episode(
         steps=steps,
         episode_num=episode_num,
         source_file=source_file,
+        has_image_0=has_image_0,
+        has_image_1=has_image_1,
+        has_image_2=has_image_2,
+        has_image_3=has_image_3,
+        has_language=has_language,
     )
 
 

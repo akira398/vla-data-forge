@@ -317,14 +317,14 @@ class TestRLDSHelpers:
     def test_ensure_image_returns_blank_for_none(self):
         from vla_curator.curation.rlds_export import _ensure_image
         img = _ensure_image(None)
-        assert img.shape == (480, 640, 3)
+        assert img.shape == (256, 256, 3)
         assert img.dtype == np.uint8
 
     def test_ensure_image_resizes(self):
         from vla_curator.curation.rlds_export import _ensure_image
         small = np.zeros((64, 64, 3), dtype=np.uint8)
         out = _ensure_image(small)
-        assert out.shape == (480, 640, 3)
+        assert out.shape == (256, 256, 3)
 
 
 # ---------------------------------------------------------------------------
