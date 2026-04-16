@@ -171,58 +171,87 @@ def main(
         raise typer.Exit(1)
     rlds_variants = _variants_map[variants.lower()]
 
+    # ── Discover Bridge v2 splits ──────────────────────────────────────────
+    # Find which splits are available (train, val, etc.)
+    bridge_splits = ["train"]  # default
+    if cfg.bridge.source in ("tfds", "rlds") and cfg.bridge.local_path is not None:
+        try:
+            import tensorflow_datasets as tfds
+            from vla_curator.datasets.bridge_v2 import find_tfds_version_dir
+            version_dir = find_tfds_version_dir(Path(cfg.bridge.local_path))
+            builder = tfds.builder_from_directory(str(version_dir))
+            bridge_splits = sorted(builder.info.splits.keys())
+        except Exception:
+            pass  # fall back to just "train"
+
     console.print("[bold]Curation pipeline[/bold]")
     console.print(f"  ECoT:      {cfg.ecot.local_path or cfg.ecot.hf_repo}")
     console.print(f"  Bridge v2: {cfg.bridge.local_path or cfg.bridge.source}")
+    console.print(f"  Splits:    {', '.join(bridge_splits)}")
     console.print(f"  Alignment: {cfg.alignment_strategy}")
     console.print(f"  Format:    {fmt.value}")
     if fmt == ExportFormat.RLDS:
         console.print(f"  Variants:  {', '.join(rlds_variants)}")
     console.print(f"  Output:    {cfg.output_dir}")
 
-    # ── Readers + interleaver ────────────────────────────────────────────────
-    ecot_reader   = ECoTDatasetReader(cfg.ecot)
-    bridge_reader = BridgeV2DatasetReader(cfg.bridge)
-    interleaver   = EpisodeInterleaver(cfg, ecot_reader, bridge_reader)
-    exporter      = create_exporter(fmt, cfg.output_dir, variants=rlds_variants)
-    validator     = DatasetValidator() if cfg.validate_output else None
+    # ── Shared ECoT reader (loaded once, used for all splits) ────────────────
+    ecot_reader = ECoTDatasetReader(cfg.ecot)
+    exporter    = create_exporter(fmt, cfg.output_dir, variants=rlds_variants)
+    validator   = DatasetValidator() if cfg.validate_output else None
 
-    # ── Episode source ───────────────────────────────────────────────────────
-    # Both RLDS and JSONL use matched-only iteration now.
-    console.print(
-        "\n[bold]Mode:[/bold] matched episodes only "
-        "(Bridge v2 episodes with ECoT match)"
-    )
-    episode_iter = interleaver.iter_matched_episodes()
-
-    # ── Main loop ────────────────────────────────────────────────────────────
+    # ── Process each split ──────────────────────────────────────────────────
     total_written    = 0
     with_reasoning   = 0
     validation_fails = 0
+    split_stats: dict[str, dict] = {}
 
-    console.print("[bold green]Starting curation…[/bold green]\n")
-    for merged_ep in episode_iter:
-        if validator:
-            result = validator.validate_episode(merged_ep)
-            if not result.passed:
+    for split in bridge_splits:
+        console.print(f"\n[bold green]Processing split: {split}[/bold green]")
+
+        # Create a Bridge reader for this split
+        from copy import deepcopy
+        bridge_cfg = deepcopy(cfg.bridge)
+        bridge_cfg.split = split
+        bridge_reader = BridgeV2DatasetReader(bridge_cfg)
+
+        interleaver = EpisodeInterleaver(cfg, ecot_reader, bridge_reader)
+
+        split_written = 0
+        split_reasoning = 0
+
+        for merged_ep in interleaver.iter_matched_episodes():
+            if validator:
+                result = validator.validate_episode(merged_ep)
+                if not result.passed:
+                    console.print(
+                        f"[yellow]Validation fail[/yellow] {merged_ep.episode_id}: "
+                        f"{result.errors}"
+                    )
+                    validation_fails += 1
+                    continue
+
+            has_r = _has_reasoning(merged_ep)
+            if has_r:
+                with_reasoning += 1
+                split_reasoning += 1
+
+            exporter.export_episode(merged_ep, split=split)
+            total_written += 1
+            split_written += 1
+
+            if split_written % 500 == 0:
                 console.print(
-                    f"[yellow]Validation fail[/yellow] {merged_ep.episode_id}: "
-                    f"{result.errors}"
+                    f"  …{split_written} episodes ({split_reasoning} with reasoning)"
                 )
-                validation_fails += 1
-                continue
 
-        if _has_reasoning(merged_ep):
-            with_reasoning += 1
-
-        exporter.export_episode(merged_ep)
-        total_written += 1
-
-        if total_written % 500 == 0:
-            console.print(
-                f"  …{total_written} episodes buffered "
-                f"({with_reasoning} with reasoning)"
-            )
+        split_stats[split] = {
+            "written": split_written,
+            "with_reasoning": split_reasoning,
+        }
+        console.print(
+            f"  {split}: {split_written} matched "
+            f"({split_reasoning} with reasoning)"
+        )
 
     # ── Finalise ─────────────────────────────────────────────────────────────
     exporter.write_metadata({
@@ -239,14 +268,18 @@ def main(
 
     from rich.table import Table
     t = Table(title="Curation summary", show_lines=True)
-    t.add_column("Metric",  style="bold")
-    t.add_column("Count",   justify="right")
-    t.add_column("",        justify="right", style="dim")
+    t.add_column("Split",   style="bold")
+    t.add_column("Matched", justify="right")
+    t.add_column("With reasoning", justify="right")
+    t.add_column("Without reasoning", justify="right")
 
-    t.add_row("Matched (total)",               str(total_written),     "")
-    t.add_row("  with reasoning",              str(with_reasoning),    f"{reasoning_pct:.1f}%")
-    t.add_row("  without reasoning",           str(without_reasoning), f"{100-reasoning_pct:.1f}%")
-    t.add_row("Validation failures",           str(validation_fails),  "")
+    for split, ss in split_stats.items():
+        wo = ss["written"] - ss["with_reasoning"]
+        t.add_row(split, str(ss["written"]), str(ss["with_reasoning"]), str(wo))
+
+    t.add_row("", "", "", "")
+    t.add_row("Total", str(total_written), str(with_reasoning), str(without_reasoning))
+    t.add_row("Validation failures", str(validation_fails), "", "")
     console.print(t)
 
     console.print(f"\nOutput: [bold]{cfg.output_dir}[/bold]")
@@ -255,11 +288,13 @@ def main(
         base = cfg.output_dir / "vla_curated_dataset"
         console.print("\n[bold]Load datasets with:[/bold]")
         if "matched" in rlds_variants:
-            console.print(f"  tfds.builder_from_directory('{base}/matched/1.0.0/')")
+            console.print(f"  builder = tfds.builder_from_directory('{base}/matched/1.0.0/')")
+            for split in bridge_splits:
+                console.print(f"  ds_{split} = builder.as_dataset(split='{split}')")
         if "reasoning_only" in rlds_variants:
             if with_reasoning > 0:
                 console.print(
-                    f"  tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
+                    f"  builder = tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
                 )
             else:
                 console.print(

@@ -63,7 +63,8 @@ _BLANK_ACTION = np.zeros(7, dtype=np.float32)
 # Module-level episode buffer — populated by RLDSExporter before the TFDS
 # builder's download_and_prepare() runs.
 # ---------------------------------------------------------------------------
-_EPISODE_BUFFER: List[InterleavedEpisode] = []
+_EPISODE_BUFFER: Dict[str, List[InterleavedEpisode]] = {}
+_BUFFER_SPLITS: List[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -247,27 +248,27 @@ def _make_builder_class():
             )
 
         def _split_generators(self, dl_manager):
-            return {"train": self._generate_examples()}
+            return {
+                split: self._generate_examples(split)
+                for split in _BUFFER_SPLITS
+            }
 
-        def _generate_examples(self):
+        def _generate_examples(self, split):
             reasoning_only = (self.builder_config.name == "reasoning_only")
+            episodes = _EPISODE_BUFFER.get(split, [])
             count = 0
-            for ep in _EPISODE_BUFFER:
+            for ep in episodes:
                 if reasoning_only and not _has_reasoning(ep):
                     continue
                 try:
-                    # Use an integer counter as the TFDS shard key — it must be
-                    # unique across all examples. ep.episode_id is NOT suitable
-                    # because multiple Bridge v2 trajectories can share the same
-                    # source file path. The actual episode ID is preserved inside
-                    # episode_metadata/file_path in the serialised dict.
                     yield count, _episode_to_dict(ep)
                     count += 1
                 except Exception:
                     logger.exception("Failed to serialise episode %s", ep.episode_id)
             logger.info(
-                "Config=%s: serialised %d episodes.",
+                "Config=%s, split=%s: serialised %d episodes.",
                 self.builder_config.name,
+                split,
                 count,
             )
 
@@ -321,15 +322,17 @@ class RLDSExporter(BaseExporter):
                 )
             self.variants = list(variants)
 
-        self._episodes: List[InterleavedEpisode] = []
+        self._episodes: Dict[str, List[InterleavedEpisode]] = {}
 
     # ------------------------------------------------------------------
     # BaseExporter interface
     # ------------------------------------------------------------------
 
-    def export_episode(self, episode: InterleavedEpisode) -> None:
+    def export_episode(self, episode: InterleavedEpisode, split: str = "train") -> None:
         """Buffer one episode. Episodes are written in bulk on write_metadata()."""
-        self._episodes.append(episode)
+        if split not in self._episodes:
+            self._episodes[split] = []
+        self._episodes[split].append(episode)
 
     def write_metadata(self, stats: Dict[str, Any]) -> None:
         """
@@ -357,33 +360,33 @@ class RLDSExporter(BaseExporter):
 
     def _write_datasets(self) -> Dict[str, Any]:
         """
-        Write both TFDS dataset variants using the buffered episodes.
+        Write TFDS dataset variants using the buffered episodes.
 
-        Returns a stats dict with episode counts for both variants.
-        Skips ``reasoning_only`` (with a warning) if no episodes have reasoning,
-        which avoids the TFDS "No examples were yielded" crash.
+        Episodes are organized by split (train, val, etc.) matching the
+        original Bridge v2 splits.  Each variant (matched, reasoning_only)
+        is written as a separate TFDS dataset with all splits preserved.
         """
-        global _EPISODE_BUFFER
+        global _EPISODE_BUFFER, _BUFFER_SPLITS
         _EPISODE_BUFFER = self._episodes
+        _BUFFER_SPLITS = sorted(_EPISODE_BUFFER.keys())
 
-        total = len(_EPISODE_BUFFER)
-        n_with_reasoning    = sum(1 for ep in _EPISODE_BUFFER if _has_reasoning(ep))
+        all_episodes = [ep for eps in _EPISODE_BUFFER.values() for ep in eps]
+        total = len(all_episodes)
+        n_with_reasoning = sum(1 for ep in all_episodes if _has_reasoning(ep))
         n_without_reasoning = total - n_with_reasoning
 
         # ── Print stats ──────────────────────────────────────────────────────
         logger.info("=" * 60)
         logger.info("RLDS export stats")
-        logger.info("  Total episodes collected : %d", total)
-        logger.info(
-            "  With ECoT reasoning      : %d  (%.1f%%)",
-            n_with_reasoning,
-            100.0 * n_with_reasoning / max(total, 1),
-        )
-        logger.info(
-            "  Without ECoT reasoning   : %d  (%.1f%%)",
-            n_without_reasoning,
-            100.0 * n_without_reasoning / max(total, 1),
-        )
+        logger.info("  Splits: %s", _BUFFER_SPLITS)
+        for split in _BUFFER_SPLITS:
+            split_eps = _EPISODE_BUFFER[split]
+            split_reasoning = sum(1 for ep in split_eps if _has_reasoning(ep))
+            logger.info(
+                "  %s: %d episodes (%d with reasoning)",
+                split, len(split_eps), split_reasoning,
+            )
+        logger.info("  Total: %d episodes (%d with reasoning)", total, n_with_reasoning)
         logger.info("=" * 60)
 
         try:
@@ -404,14 +407,14 @@ class RLDSExporter(BaseExporter):
 
         # ── matched ──────────────────────────────────────────────────────────
         if "matched" in self.variants:
-            logger.info("Writing matched dataset (%d episodes)…", total)
+            logger.info("Writing matched dataset (%d episodes, splits=%s)…",
+                        total, _BUFFER_SPLITS)
             builder_matched = builder_cls(config="matched", data_dir=str(self.output_dir))
             builder_matched.download_and_prepare(download_config=dl_config)
             written["matched"] = total
             logger.info(
                 "matched → %s/vla_curated_dataset/matched/1.0.0/  (%d episodes)",
-                self.output_dir,
-                total,
+                self.output_dir, total,
             )
         else:
             logger.info("Skipping matched dataset (not requested).")
@@ -440,8 +443,7 @@ class RLDSExporter(BaseExporter):
             logger.info(
                 "reasoning_only → %s/vla_curated_dataset/reasoning_only/1.0.0/"
                 "  (%d episodes)",
-                self.output_dir,
-                n_with_reasoning,
+                self.output_dir, n_with_reasoning,
             )
 
         return {
@@ -451,4 +453,5 @@ class RLDSExporter(BaseExporter):
             "reasoning_match_rate":     round(n_with_reasoning / max(total, 1), 4),
             "written_matched":          written["matched"],
             "written_reasoning_only":   written["reasoning_only"],
+            "splits":                   _BUFFER_SPLITS,
         }

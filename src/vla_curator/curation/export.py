@@ -54,7 +54,7 @@ class BaseExporter(ABC):
     """Abstract base for all exporters."""
 
     @abstractmethod
-    def export_episode(self, episode: InterleavedEpisode) -> None:
+    def export_episode(self, episode: InterleavedEpisode, split: str = "train") -> None:
         ...
 
     def export_dataset(
