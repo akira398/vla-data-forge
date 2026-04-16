@@ -1,30 +1,26 @@
 """
-CLI: Visualize a curated RLDS dataset episode (full or reasoning_only).
+CLI: Visualize a curated RLDS dataset episode frame by frame.
 
-Shows both cameras side-by-side for each step with reasoning annotations,
-action values, and alignment confidence — saved to disk (headless safe).
+Produces one PNG per step.  Each PNG has a white background and shows:
+  - Header:   "Step 0 / 27  —  <task instruction>"
+  - Images:   primary camera (cam0) and wrist camera (cam1) side by side
+  - Reasoning: task / subtask / move reasoning text
+  - Metadata: alignment confidence + 7-DoF action values
+
+Layout mirrors the Bridge v2 dual-camera viewer.
 
 Usage
 -----
-# Random episode from the full dataset:
+# Random episode, full dataset:
 python scripts/visualize_curated.py \
     --path outputs/curated/vla_curated_dataset/full/1.0.0
 
-# Random episode from reasoning_only:
+# Specific episode:
 python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/reasoning_only/1.0.0
+    --path outputs/curated/vla_curated_dataset/reasoning_only/1.0.0 \
+    --episode-index 5
 
-# Specific episode index:
-python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/full/1.0.0 \
-    --episode-index 42
-
-# Show more frames:
-python scripts/visualize_curated.py \
-    --path outputs/curated/vla_curated_dataset/full/1.0.0 \
-    --max-frames 24
-
-# Custom output directory:
+# Custom output dir:
 python scripts/visualize_curated.py \
     --path outputs/curated/vla_curated_dataset/full/1.0.0 \
     --save-dir outputs/viz/curated
@@ -32,7 +28,6 @@ python scripts/visualize_curated.py \
 
 from __future__ import annotations
 
-import math
 import random
 import sys
 from pathlib import Path
@@ -44,22 +39,20 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import typer
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-app = typer.Typer(help="Visualize a curated RLDS episode.")
+app = typer.Typer(help="Visualize a curated RLDS episode frame by frame.")
 console = Console()
 
 
 # ---------------------------------------------------------------------------
-# TFDS loading helpers
+# TFDS loading
 # ---------------------------------------------------------------------------
 
 
 def _load_episode(dataset_path: Path, episode_index: int):
-    """Load one episode from a TFDS dataset directory."""
     try:
         import tensorflow_datasets as tfds
     except ImportError as exc:
@@ -70,63 +63,60 @@ def _load_episode(dataset_path: Path, episode_index: int):
 
     builder = tfds.builder_from_directory(str(dataset_path))
     ds = builder.as_dataset(split="train")
-
     for i, ep in enumerate(ds):
         if i == episode_index:
-            return ep, builder.info
-
+            return ep
     raise IndexError(
-        f"Episode index {episode_index} out of range "
-        f"(dataset has fewer episodes)."
+        f"Episode index {episode_index} is out of range for this dataset."
     )
 
 
-def _tensor_to_numpy(val):
-    if hasattr(val, "numpy"):
-        return val.numpy()
-    return val
-
-
-def _decode_text(val) -> str:
-    v = _tensor_to_numpy(val)
+def _t(val) -> str:
+    """Decode a TF bytes tensor to a Python str."""
+    v = val.numpy() if hasattr(val, "numpy") else val
     if isinstance(v, bytes):
         return v.decode("utf-8", errors="replace")
-    return str(v) if v is not None else ""
+    return str(v) if v else ""
 
 
-def _decode_image(val) -> np.ndarray:
-    arr = _tensor_to_numpy(val)
-    return np.asarray(arr, dtype=np.uint8)
+def _arr(val) -> np.ndarray:
+    v = val.numpy() if hasattr(val, "numpy") else val
+    return np.asarray(v)
 
 
 def _parse_steps(episode) -> list[dict]:
-    """Convert a TFDS episode dict into a plain list of step dicts."""
     steps = []
     for step in episode["steps"]:
         obs = step["observation"]
         steps.append({
-            "image_0":            _decode_image(obs["image_0"]),
-            "image_1":            _decode_image(obs["image_1"]),
-            "state":              _tensor_to_numpy(obs["state"]),
-            "language_instruction": _decode_text(obs["language_instruction"]),
-            "task_reasoning":     _decode_text(obs["task_reasoning"]),
-            "subtask_reasoning":  _decode_text(obs["subtask_reasoning"]),
-            "move_reasoning":     _decode_text(obs["move_reasoning"]),
-            "action":             _tensor_to_numpy(step["action"]),
-            "is_first":           bool(_tensor_to_numpy(step["is_first"])),
-            "is_last":            bool(_tensor_to_numpy(step["is_last"])),
-            "alignment_confidence": float(_tensor_to_numpy(step["alignment_confidence"])),
+            "image_0":            _arr(obs["image_0"]).astype(np.uint8),
+            "image_1":            _arr(obs["image_1"]).astype(np.uint8),
+            "language_instruction": _t(obs["language_instruction"]),
+            "task_reasoning":     _t(obs["task_reasoning"]),
+            "subtask_reasoning":  _t(obs["subtask_reasoning"]),
+            "move_reasoning":     _t(obs["move_reasoning"]),
+            "action":             _arr(step["action"]).astype(np.float32),
+            "is_first":           bool(_arr(step["is_first"])),
+            "is_last":            bool(_arr(step["is_last"])),
+            "alignment_confidence": float(_arr(step["alignment_confidence"])),
         })
     return steps
 
 
 # ---------------------------------------------------------------------------
-# Visualization helpers
+# Per-step figure
 # ---------------------------------------------------------------------------
 
+# Confidence colour (used for the confidence badge only)
+def _conf_color(c: float) -> str:
+    if c >= 0.95:
+        return "#2ecc71"   # green  — direct annotation
+    if c >= 0.4:
+        return "#e67e22"   # orange — propagated
+    return "#e74c3c"       # red    — no match
 
-def _wrap(text: str, width: int = 52) -> str:
-    """Hard-wrap text to `width` characters per line."""
+
+def _wrap(text: str, width: int = 55) -> str:
     if not text:
         return "—"
     words = text.split()
@@ -143,163 +133,179 @@ def _wrap(text: str, width: int = 52) -> str:
     return "\n".join(lines)
 
 
-def _confidence_color(conf: float) -> str:
-    if conf >= 0.95:
-        return "#2ecc71"   # green  — direct annotation
-    if conf >= 0.5:
-        return "#f39c12"   # orange — propagated
-    return "#e74c3c"       # red    — no match
-
-
-def _save_episode_grid(
-    steps: list[dict],
+def _save_step_figure(
+    step: dict,
+    step_idx: int,
+    total_steps: int,
     save_path: Path,
-    max_frames: int = 16,
 ) -> None:
     """
-    Save a grid figure: one column per step, two rows of images + reasoning text.
+    Save one PNG for a single step.
 
-    Layout per column:
-      row 0 — primary camera   (image_0)
-      row 1 — wrist camera     (image_1)
-      row 2 — reasoning text box
+    Layout
+    ------
+    ┌──────────────────────────────────────────────────────────┐
+    │  Step 3 / 27  —  pick up the orange from the table       │  ← suptitle
+    ├──────────────────┬───────────────────┬───────────────────┤
+    │                  │                   │  task_reasoning   │
+    │    cam 0         │    cam 1          │  subtask_reas.    │
+    │  (primary)       │  (wrist)          │  move_reasoning   │
+    │                  │                   │  confidence       │
+    │                  │                   │  action           │
+    └──────────────────┴───────────────────┴───────────────────┘
     """
-    # Subsample frames evenly
-    if len(steps) > max_frames:
-        indices = [int(i * len(steps) / max_frames) for i in range(max_frames)]
-        steps = [steps[i] for i in indices]
+    fig = plt.figure(figsize=(14, 5.5), facecolor="white")
 
-    n = len(steps)
-    fig_w = max(n * 2.8, 10)
-    fig_h = 14
+    task = step["language_instruction"] or "—"
+    flags = []
+    if step["is_first"]:
+        flags.append("START")
+    if step["is_last"]:
+        flags.append("END")
+    flag_str = f"  [{' · '.join(flags)}]" if flags else ""
 
-    fig = plt.figure(figsize=(fig_w, fig_h), facecolor="#1a1a2e")
-
-    # Title
-    task = steps[0]["language_instruction"] if steps else ""
-    n_with_r = sum(1 for s in steps if s["task_reasoning"])
-    conf_avg = sum(s["alignment_confidence"] for s in steps) / max(len(steps), 1)
     fig.suptitle(
-        f'Task: {task}\n'
-        f'{n_with_r}/{len(steps)} steps with reasoning  |  '
-        f'avg confidence: {conf_avg:.2f}',
-        color="white", fontsize=10, y=0.98,
+        f"Step {step_idx} / {total_steps - 1}{flag_str}   —   {task}",
+        fontsize=11, fontweight="bold", color="black", y=0.98,
     )
 
+    # 3-column grid: cam0 | cam1 | text
     gs = gridspec.GridSpec(
-        3, n,
-        figure=fig,
-        hspace=0.05,
-        wspace=0.05,
-        top=0.92, bottom=0.02,
-        left=0.01, right=0.99,
+        1, 3, figure=fig,
+        left=0.02, right=0.98,
+        top=0.88, bottom=0.04,
+        wspace=0.06,
+        width_ratios=[2, 2, 3],
     )
 
-    for col, step in enumerate(steps):
-        conf  = step["alignment_confidence"]
-        color = _confidence_color(conf)
+    # ── cam 0 ────────────────────────────────────────────────────────────────
+    ax0 = fig.add_subplot(gs[0, 0])
+    img0 = step["image_0"]
+    if img0.size > 0 and img0.max() > 0:
+        ax0.imshow(img0)
+    else:
+        ax0.set_facecolor("#e0e0e0")
+        ax0.text(0.5, 0.5, "No image", ha="center", va="center",
+                 transform=ax0.transAxes, fontsize=9, color="#666")
+    ax0.set_title("Camera 0  (primary)", fontsize=9, color="black", pad=4)
+    ax0.axis("off")
+    for spine in ax0.spines.values():
+        spine.set_visible(True)
+        spine.set_edgecolor("#cccccc")
+        spine.set_linewidth(0.8)
 
-        # ── Primary camera ──────────────────────────────────────────────────
-        ax0 = fig.add_subplot(gs[0, col])
-        ax0.imshow(step["image_0"])
-        ax0.set_xticks([]); ax0.set_yticks([])
-        for spine in ax0.spines.values():
-            spine.set_edgecolor(color); spine.set_linewidth(2)
-        if col == 0:
-            ax0.set_ylabel("cam 0", color="white", fontsize=7)
-        ax0.set_title(f"t={col}", color="white", fontsize=7, pad=2)
+    # ── cam 1 ────────────────────────────────────────────────────────────────
+    ax1 = fig.add_subplot(gs[0, 1])
+    img1 = step["image_1"]
+    if img1.size > 0 and img1.max() > 0:
+        ax1.imshow(img1)
+    else:
+        ax1.set_facecolor("#e0e0e0")
+        ax1.text(0.5, 0.5, "No image", ha="center", va="center",
+                 transform=ax1.transAxes, fontsize=9, color="#666")
+    ax1.set_title("Camera 1  (wrist)", fontsize=9, color="black", pad=4)
+    ax1.axis("off")
+    for spine in ax1.spines.values():
+        spine.set_visible(True)
+        spine.set_edgecolor("#cccccc")
+        spine.set_linewidth(0.8)
 
-        # ── Wrist camera ────────────────────────────────────────────────────
-        ax1 = fig.add_subplot(gs[1, col])
-        ax1.imshow(step["image_1"])
-        ax1.set_xticks([]); ax1.set_yticks([])
-        for spine in ax1.spines.values():
-            spine.set_edgecolor(color); spine.set_linewidth(2)
-        if col == 0:
-            ax1.set_ylabel("cam 1", color="white", fontsize=7)
+    # ── text panel ────────────────────────────────────────────────────────────
+    ax2 = fig.add_subplot(gs[0, 2])
+    ax2.set_facecolor("white")
+    ax2.axis("off")
 
-        # ── Reasoning text ──────────────────────────────────────────────────
-        ax2 = fig.add_subplot(gs[2, col])
-        ax2.set_facecolor("#0f0f23")
-        ax2.set_xticks([]); ax2.set_yticks([])
-        for spine in ax2.spines.values():
-            spine.set_edgecolor(color); spine.set_linewidth(1.5)
+    conf  = step["alignment_confidence"]
+    act   = step["action"]
 
-        task_r    = step["task_reasoning"]
-        subtask_r = step["subtask_reasoning"]
-        move_r    = step["move_reasoning"]
-        action    = step["action"]
-        act_str   = "[" + ", ".join(f"{v:.2f}" for v in action) + "]"
-
-        text_lines = []
-        if task_r:
-            text_lines.append(("task", task_r, "#3498db"))
-        if subtask_r:
-            text_lines.append(("subtask", subtask_r, "#9b59b6"))
-        if move_r:
-            text_lines.append(("move", move_r, "#1abc9c"))
-        text_lines.append(("action", act_str, "#95a5a6"))
-        text_lines.append(("conf", f"{conf:.2f}", color))
-
-        y = 0.97
-        for label, text, clr in text_lines:
-            wrapped = _wrap(text, width=30)
-            n_lines = wrapped.count("\n") + 1
-            ax2.text(
-                0.03, y,
-                f"[{label}]\n{wrapped}",
-                transform=ax2.transAxes,
-                color=clr, fontsize=5.5,
-                verticalalignment="top",
-                fontfamily="monospace",
-            )
-            y -= 0.13 * (n_lines + 1)
-            if y < 0.02:
-                break
-
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=120, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close(fig)
-
-
-def _save_reasoning_timeline(steps: list[dict], save_path: Path) -> None:
-    """
-    Save a vertical timeline figure: one row per step, showing confidence
-    and reasoning presence as a coloured strip.
-    """
-    n = len(steps)
-    fig, ax = plt.subplots(figsize=(12, max(n * 0.35, 4)), facecolor="#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
-
-    for i, step in enumerate(steps):
-        conf  = step["alignment_confidence"]
-        color = _confidence_color(conf)
-        has_r = bool(step["task_reasoning"])
-
-        # Confidence bar
-        ax.barh(i, conf, color=color, alpha=0.8, height=0.7)
-
-        # Label
-        task_r = step["task_reasoning"][:60] + "…" if len(step["task_reasoning"]) > 60 else step["task_reasoning"]
-        label  = f"t={i:3d}  [{conf:.2f}]  {task_r or '(no reasoning)'}"
-        ax.text(0.01, i, label, va="center", color="white", fontsize=6.5,
-                fontfamily="monospace")
-
-    ax.set_xlim(0, 1.0)
-    ax.set_ylim(-0.5, n - 0.5)
-    ax.invert_yaxis()
-    ax.set_xlabel("Alignment confidence", color="white")
-    ax.set_title(
-        f"Reasoning timeline — {n} steps\n"
-        f"task: {steps[0]['language_instruction'] if steps else ''}",
-        color="white",
+    action_str = (
+        f"Δxyz  [{act[0]:+.3f}, {act[1]:+.3f}, {act[2]:+.3f}]\n"
+        f"Δrpy  [{act[3]:+.3f}, {act[4]:+.3f}, {act[5]:+.3f}]\n"
+        f"grip   {act[6]:.3f}  ({'CLOSE' if act[6] > 0.5 else 'OPEN '})"
     )
-    ax.tick_params(colors="white")
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#444")
+
+    sections = [
+        ("Task reasoning",    step["task_reasoning"],    "#1a1a1a"),
+        ("Subtask reasoning", step["subtask_reasoning"], "#1a1a1a"),
+        ("Move reasoning",    step["move_reasoning"],    "#1a1a1a"),
+    ]
+
+    y = 0.97
+    LINE_H  = 0.055   # per text line
+    LABEL_H = 0.065   # label row height
+    GAP     = 0.025   # gap between sections
+
+    for label, text, color in sections:
+        wrapped = _wrap(text, width=52)
+        n_lines = wrapped.count("\n") + 1
+
+        # Section label
+        ax2.text(
+            0.02, y, label,
+            transform=ax2.transAxes,
+            fontsize=8, fontweight="bold", color="#555555",
+            verticalalignment="top",
+        )
+        y -= LABEL_H
+
+        # Section body
+        ax2.text(
+            0.02, y, wrapped,
+            transform=ax2.transAxes,
+            fontsize=8.5, color=color,
+            verticalalignment="top",
+            fontfamily="sans-serif",
+        )
+        y -= LINE_H * n_lines + GAP
+
+        # Thin separator line
+        ax2.axhline(y + GAP * 0.5, color="#dddddd", linewidth=0.7,
+                    xmin=0.02, xmax=0.98)
+        y -= GAP * 0.5
+
+    # Confidence badge
+    ax2.text(
+        0.02, y, "Alignment confidence",
+        transform=ax2.transAxes,
+        fontsize=8, fontweight="bold", color="#555555",
+        verticalalignment="top",
+    )
+    y -= LABEL_H
+    conf_label = (
+        "direct annotation (1.0)" if conf >= 0.95 else
+        f"propagated ({conf:.2f})"    if conf >= 0.4  else
+        f"no ECoT match ({conf:.2f})"
+    )
+    ax2.text(
+        0.02, y, conf_label,
+        transform=ax2.transAxes,
+        fontsize=8.5, color=_conf_color(conf),
+        verticalalignment="top", fontweight="bold",
+    )
+    y -= LINE_H + GAP
+    ax2.axhline(y + GAP * 0.5, color="#dddddd", linewidth=0.7,
+                xmin=0.02, xmax=0.98)
+    y -= GAP * 0.5
+
+    # Action
+    ax2.text(
+        0.02, y, "Action  (7-DoF)",
+        transform=ax2.transAxes,
+        fontsize=8, fontweight="bold", color="#555555",
+        verticalalignment="top",
+    )
+    y -= LABEL_H
+    ax2.text(
+        0.02, y, action_str,
+        transform=ax2.transAxes,
+        fontsize=8.5, color="#1a1a1a",
+        verticalalignment="top",
+        fontfamily="monospace",
+    )
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=120, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(save_path, dpi=130, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
     plt.close(fig)
 
 
@@ -317,26 +323,24 @@ def main(
     ),
     episode_index: int = typer.Option(
         -1, "--episode-index", "-e",
-        help="Episode index to visualize (-1 = random).",
+        help="Episode index (-1 = random).",
     ),
     max_frames: int = typer.Option(
-        16, "--max-frames",
-        help="Max frames to show in the grid (evenly subsampled).",
+        None, "--max-frames",
+        help="Save only the first N frames (default: all frames).",
     ),
     save_dir: Path = typer.Option(
         Path("outputs/viz/curated"), "--save-dir",
     ),
 ) -> None:
 
-    # ── Pick episode index ────────────────────────────────────────────────────
     if episode_index < 0:
         episode_index = random.randint(0, 5000)
         console.print(f"Random episode index: [bold]{episode_index}[/bold]")
 
-    # ── Load ─────────────────────────────────────────────────────────────────
-    console.print(f"Loading episode {episode_index} from [bold]{path}[/bold]…")
+    console.print(f"Loading episode {episode_index} from [bold]{path}[/bold] …")
     try:
-        episode, info = _load_episode(path, episode_index)
+        episode = _load_episode(path, episode_index)
     except IndexError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -346,46 +350,39 @@ def main(
         console.print("[red]Episode has no steps.[/red]")
         raise typer.Exit(1)
 
-    # ── Console summary ───────────────────────────────────────────────────────
+    if max_frames is not None:
+        steps = steps[:max_frames]
+
+    total = len(steps)   # after possible truncation (for header display use original)
+    total_display = len(_parse_steps(episode))  # original total for "X / N" header
+
+    # Console summary
     n_with_r  = sum(1 for s in steps if s["task_reasoning"])
     conf_vals = [s["alignment_confidence"] for s in steps]
 
     t = Table(title=f"Episode {episode_index}", show_lines=True)
-    t.add_column("Field", style="bold")
+    t.add_column("Field",  style="bold")
     t.add_column("Value")
-    t.add_row("Task",             steps[0]["language_instruction"])
-    t.add_row("Steps",            str(len(steps)))
-    t.add_row("With reasoning",   f"{n_with_r}/{len(steps)}  ({100*n_with_r/len(steps):.0f}%)")
-    t.add_row("Avg confidence",   f"{sum(conf_vals)/len(conf_vals):.3f}")
-    t.add_row("Min confidence",   f"{min(conf_vals):.3f}")
+    t.add_row("Task",           steps[0]["language_instruction"])
+    t.add_row("Total steps",    str(total_display))
+    t.add_row("Saving frames",  str(total))
+    t.add_row("With reasoning", f"{n_with_r}/{total}  ({100*n_with_r/max(total,1):.0f}%)")
+    t.add_row("Avg confidence", f"{sum(conf_vals)/len(conf_vals):.3f}")
     console.print(t)
 
-    # Print first annotated step's reasoning
-    for s in steps:
-        if s["task_reasoning"]:
-            console.print(Panel(
-                f"[bold blue]task:[/bold blue]    {s['task_reasoning']}\n"
-                f"[bold magenta]subtask:[/bold magenta] {s['subtask_reasoning']}\n"
-                f"[bold cyan]move:[/bold cyan]    {s['move_reasoning']}",
-                title="First annotated step reasoning",
-                expand=False,
-            ))
-            break
+    # Save one PNG per step
+    variant  = path.parent.name   # "full" or "reasoning_only"
+    ep_dir   = save_dir / f"ep{episode_index:05d}_{variant}"
+    ep_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Save figures ──────────────────────────────────────────────────────────
-    variant = path.parent.name   # "full" or "reasoning_only"
-    base_name = f"ep{episode_index:05d}_{variant}"
+    console.print(f"\nSaving {total} frames to [bold]{ep_dir}[/bold] …")
+    for i, step in enumerate(steps):
+        out = ep_dir / f"step_{i:05d}.png"
+        _save_step_figure(step, i, total_display, out)
+        if (i + 1) % 10 == 0 or i == total - 1:
+            console.print(f"  {i+1}/{total}")
 
-    grid_path     = save_dir / f"{base_name}_grid.png"
-    timeline_path = save_dir / f"{base_name}_timeline.png"
-
-    console.print(f"\nSaving frame grid   → [bold]{grid_path}[/bold]")
-    _save_episode_grid(steps, grid_path, max_frames=max_frames)
-
-    console.print(f"Saving timeline     → [bold]{timeline_path}[/bold]")
-    _save_reasoning_timeline(steps, timeline_path)
-
-    console.print("\n[bold green]Done.[/bold green]")
+    console.print(f"\n[bold green]Done.[/bold green]  {total} PNGs → {ep_dir}")
 
 
 if __name__ == "__main__":
