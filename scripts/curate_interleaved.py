@@ -69,6 +69,7 @@ from vla_curator.config import (
 )
 from vla_curator.curation.export import ExportFormat, JSONLExporter, create_exporter
 from vla_curator.curation.interleaver import EpisodeInterleaver
+from vla_curator.curation.rlds_export import _has_reasoning
 from vla_curator.curation.validator import DatasetValidator
 from vla_curator.datasets.bridge_v2 import BridgeV2DatasetReader
 from vla_curator.datasets.embodied_cot import ECoTDatasetReader
@@ -211,7 +212,7 @@ def main(
                 validation_fails += 1
                 continue
 
-        if merged_ep.has_reasoning():
+        if _has_reasoning(merged_ep):
             with_reasoning += 1
 
         exporter.export_episode(merged_ep)
