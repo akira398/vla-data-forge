@@ -246,9 +246,22 @@ Merges ECoT reasoning annotations with Bridge v2 observations and actions.
 The default output format is **RLDS** (Bridge v2 compatible TFRecord files).
 
 ```bash
+# Write both full + reasoning_only datasets (default):
 python scripts/curate_interleaved.py \
     --bridge-path /datasets/bridge_orig \
     --ecot-path /datasets/embodied_features_bridge
+
+# Write only the full dataset (faster — skips reasoning_only):
+python scripts/curate_interleaved.py \
+    --bridge-path /datasets/bridge_orig \
+    --ecot-path /datasets/embodied_features_bridge \
+    --variants full
+
+# Write only reasoning-annotated episodes:
+python scripts/curate_interleaved.py \
+    --bridge-path /datasets/bridge_orig \
+    --ecot-path /datasets/embodied_features_bridge \
+    --variants reasoning_only
 
 # Quick test with 100 episodes:
 python scripts/curate_interleaved.py \
@@ -262,6 +275,14 @@ python scripts/curate_interleaved.py \
     --ecot-path /datasets/embodied_features_bridge \
     --format jsonl
 ```
+
+`--variants` options:
+
+| Value | Description |
+|-------|-------------|
+| `both` | Write `full` and `reasoning_only` (default) |
+| `full` | All Bridge v2 episodes; empty reasoning strings for unmatched |
+| `reasoning_only` | Only episodes with at least one ECoT reasoning annotation |
 
 Alignment strategies (used for ECoT → Bridge v2 step matching):
 
