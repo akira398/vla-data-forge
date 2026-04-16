@@ -309,14 +309,15 @@ class RLDSExporter(BaseExporter):
         Write all buffered episodes to RLDS TFRecord files.
 
         Called once after all episodes have been collected via export_episode().
+        Prints a stats summary and merges episode counts into the stats dict.
         """
         if not self._episodes:
             logger.warning("RLDSExporter: no episodes to write.")
             return
 
-        self._write_datasets()
+        episode_stats = self._write_datasets()
+        stats.update(episode_stats)
 
-        # Also write a human-readable stats file alongside
         import json
         stats_path = self.output_dir / "curation_stats.json"
         with open(stats_path, "w", encoding="utf-8") as f:
@@ -327,14 +328,36 @@ class RLDSExporter(BaseExporter):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _write_datasets(self) -> None:
-        """Write both TFDS dataset variants using the buffered episodes."""
+    def _write_datasets(self) -> Dict[str, Any]:
+        """
+        Write both TFDS dataset variants using the buffered episodes.
+
+        Returns a stats dict with episode counts for both variants.
+        Skips ``reasoning_only`` (with a warning) if no episodes have reasoning,
+        which avoids the TFDS "No examples were yielded" crash.
+        """
         global _EPISODE_BUFFER
         _EPISODE_BUFFER = self._episodes
 
+        total = len(_EPISODE_BUFFER)
+        n_with_reasoning    = sum(1 for ep in _EPISODE_BUFFER if _has_reasoning(ep))
+        n_without_reasoning = total - n_with_reasoning
+
+        # ── Print stats ──────────────────────────────────────────────────────
+        logger.info("=" * 60)
+        logger.info("RLDS export stats")
+        logger.info("  Total episodes collected : %d", total)
         logger.info(
-            "Writing RLDS datasets (%d episodes total)…", len(_EPISODE_BUFFER)
+            "  With ECoT reasoning      : %d  (%.1f%%)",
+            n_with_reasoning,
+            100.0 * n_with_reasoning / max(total, 1),
         )
+        logger.info(
+            "  Without ECoT reasoning   : %d  (%.1f%%)",
+            n_without_reasoning,
+            100.0 * n_without_reasoning / max(total, 1),
+        )
+        logger.info("=" * 60)
 
         try:
             import tensorflow_datasets as tfds
@@ -345,32 +368,53 @@ class RLDSExporter(BaseExporter):
             ) from exc
 
         builder_cls = _make_builder_class()
+        dl_config = tfds.download.DownloadConfig(
+            manual_dir=str(self.output_dir),
+            register_checksums=False,
+        )
 
-        for config_name in ("full", "reasoning_only"):
-            logger.info("Writing config=%s…", config_name)
-            builder = builder_cls(
-                config=config_name,
-                data_dir=str(self.output_dir),
+        written: Dict[str, int] = {}
+
+        # ── full ─────────────────────────────────────────────────────────────
+        logger.info("Writing full dataset (%d episodes)…", total)
+        builder_full = builder_cls(config="full", data_dir=str(self.output_dir))
+        builder_full.download_and_prepare(download_config=dl_config)
+        written["full"] = total
+        logger.info(
+            "full → %s/vla_curated_dataset/full/1.0.0/  (%d episodes)",
+            self.output_dir,
+            total,
+        )
+
+        # ── reasoning_only ───────────────────────────────────────────────────
+        if n_with_reasoning == 0:
+            logger.warning(
+                "reasoning_only dataset skipped — no episodes matched ECoT paths.\n"
+                "  Check that --ecot-path points to the correct directory and that\n"
+                "  Bridge v2 source_file paths overlap with ECoT file_path keys."
             )
-            builder.download_and_prepare(
-                download_config=tfds.download.DownloadConfig(
-                    manual_dir=str(self.output_dir),
-                    register_checksums=False,
-                )
-            )
-            version_dir = (
-                self.output_dir
-                / "vla_curated_dataset"
-                / config_name
-                / "1.0.0"
-            )
-            n = sum(
-                1 for ep in _EPISODE_BUFFER
-                if config_name == "full" or _has_reasoning(ep)
-            )
+            written["reasoning_only"] = 0
+        else:
             logger.info(
-                "Config=%s written → %s  (%d episodes)",
-                config_name,
-                version_dir,
-                n,
+                "Writing reasoning_only dataset (%d episodes)…", n_with_reasoning
             )
+            builder_ro = builder_cls(
+                config="reasoning_only", data_dir=str(self.output_dir)
+            )
+            builder_ro.download_and_prepare(download_config=dl_config)
+            written["reasoning_only"] = n_with_reasoning
+            logger.info(
+                "reasoning_only → %s/vla_curated_dataset/reasoning_only/1.0.0/"
+                "  (%d episodes)",
+                self.output_dir,
+                n_with_reasoning,
+            )
+
+        return {
+            "episodes_total":           total,
+            "episodes_with_reasoning":  n_with_reasoning,
+            "episodes_without_reasoning": n_without_reasoning,
+            "reasoning_match_rate":     round(n_with_reasoning / max(total, 1), 4),
+            "written_full":             written["full"],
+            "written_reasoning_only":   written["reasoning_only"],
+        }

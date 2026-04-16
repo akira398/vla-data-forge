@@ -173,7 +173,8 @@ def main(
         episode_iter = interleaver.iter_episodes()
 
     # ── Main loop ────────────────────────────────────────────────────────────
-    total_written = 0
+    total_written    = 0
+    with_reasoning   = 0
     validation_fails = 0
 
     console.print("[bold green]Starting curation…[/bold green]\n")
@@ -188,36 +189,58 @@ def main(
                 validation_fails += 1
                 continue
 
+        if merged_ep.has_reasoning():
+            with_reasoning += 1
+
         exporter.export_episode(merged_ep)
         total_written += 1
 
         if total_written % 500 == 0:
-            console.print(f"  …{total_written} episodes buffered")
+            console.print(
+                f"  …{total_written} episodes buffered "
+                f"({with_reasoning} with reasoning)"
+            )
 
     # ── Finalise ─────────────────────────────────────────────────────────────
     exporter.write_metadata({
-        "total_episodes": total_written,
-        "validation_fails": validation_fails,
+        "total_episodes":    total_written,
+        "validation_fails":  validation_fails,
         "alignment_strategy": cfg.alignment_strategy,
-        "output_format": fmt.value,
-        "schema_version": cfg.schema_version,
+        "output_format":     fmt.value,
+        "schema_version":    cfg.schema_version,
     })
 
-    console.print(
-        f"\n[green]Done.[/green] {total_written} episodes written, "
-        f"{validation_fails} failed validation."
-    )
-    console.print(f"Output: [bold]{cfg.output_dir}[/bold]")
+    # ── Summary ──────────────────────────────────────────────────────────────
+    without_reasoning = total_written - with_reasoning
+    match_pct = 100.0 * with_reasoning / max(total_written, 1)
+
+    from rich.table import Table
+    t = Table(title="Curation summary", show_lines=True)
+    t.add_column("Metric",  style="bold")
+    t.add_column("Count",   justify="right")
+    t.add_column("",        justify="right", style="dim")
+
+    t.add_row("Total episodes",             str(total_written),    "")
+    t.add_row("With ECoT reasoning",        str(with_reasoning),   f"{match_pct:.1f}%")
+    t.add_row("Without ECoT reasoning",     str(without_reasoning),f"{100-match_pct:.1f}%")
+    t.add_row("Validation failures",        str(validation_fails), "")
+    console.print(t)
+
+    console.print(f"\nOutput: [bold]{cfg.output_dir}[/bold]")
 
     if fmt == ExportFormat.RLDS:
         base = cfg.output_dir / "vla_curated_dataset"
-        console.print("\nLoad datasets with:")
-        console.print(
-            f"  tfds.builder_from_directory('{base}/full/1.0.0/')"
-        )
-        console.print(
-            f"  tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
-        )
+        console.print("\n[bold]Load datasets with:[/bold]")
+        console.print(f"  tfds.builder_from_directory('{base}/full/1.0.0/')")
+        if with_reasoning > 0:
+            console.print(
+                f"  tfds.builder_from_directory('{base}/reasoning_only/1.0.0/')"
+            )
+        else:
+            console.print(
+                "  [yellow]reasoning_only dataset was skipped "
+                "(no ECoT matches found)[/yellow]"
+            )
 
 
 if __name__ == "__main__":
