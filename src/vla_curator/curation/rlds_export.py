@@ -145,16 +145,6 @@ def _episode_to_dict(ep: InterleavedEpisode) -> dict:
     """Convert one InterleavedEpisode to a TFDS-serialisable dict."""
     task_desc = ep.task_description or ""
 
-    # Bridge v2 TFDS often has empty language_instruction fields.
-    # ECoT-matched episodes carry task_reasoning on each step, which IS the
-    # task description (e.g. "pick up the orange from the table").
-    # Use it as a fallback so the curated dataset always has a task label.
-    if not task_desc:
-        for step in ep.steps:
-            if step.reasoning and step.reasoning.task_reasoning:
-                task_desc = step.reasoning.task_reasoning
-                break
-
     steps = []
     for step in ep.steps:
         obs = step.observation
