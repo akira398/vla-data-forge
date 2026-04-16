@@ -165,34 +165,30 @@ class TestEpisodeInterleaver:
 
 
 class TestNormalizeEpisodeId:
-    def test_absolute_nfs_path_stripped(self):
-        ecot_path = (
-            "/nfs/s3_bucket/username/numpy_256/"
-            "bridge_data_v2/datacol2_tabletop_manipulations/put_knife_on_cutting_board/"
-            "2023-01-21_13-46-24/0/out.npy"
-        )
-        result = _normalize_episode_id(ecot_path)
-        assert result == (
-            "bridge_data_v2/datacol2_tabletop_manipulations/put_knife_on_cutting_board/"
-            "2023-01-21_13-46-24/0/out.npy"
-        )
+    def test_leading_slash_stripped(self):
+        # Both Bridge v2 and ECoT store the same absolute NFS path;
+        # we only strip the leading slash so they compare as equal.
+        path = "/nfs/s3_bucket/username/numpy_256/bridge_data_v2/env/task/ep/out.npy"
+        result = _normalize_episode_id(path)
+        assert result == "nfs/s3_bucket/username/numpy_256/bridge_data_v2/env/task/ep/out.npy"
 
-    def test_relative_bridge_path_unchanged(self):
-        rel_path = "bridge_data_v2/env/task/ep/split/out.npy"
-        assert _normalize_episode_id(rel_path) == rel_path
+    def test_path_without_leading_slash_unchanged(self):
+        path = "nfs/s3_bucket/numpy_256/bridge_data_v2/env/task/ep/out.npy"
+        assert _normalize_episode_id(path) == path
 
-    def test_leading_slash_stripped_fallback(self):
-        path = "/bridge_data_v2/env/task/ep/out.npy"
-        assert _normalize_episode_id(path) == "bridge_data_v2/env/task/ep/out.npy"
+    def test_same_absolute_path_matches(self):
+        # Simulates Bridge v2 source_file == ECoT top-level key (same absolute path)
+        abs_path = "/nfs/mount/numpy_256/bridge_data_v2/env/task/ep/out.npy"
+        assert _normalize_episode_id(abs_path) == _normalize_episode_id(abs_path)
 
     def test_source_file_takes_priority(self):
         ep_id = "some_other_id"
         source = "/nfs/foo/numpy_256/bridge_data_v2/env/task/ep/out.npy"
         result = _normalize_episode_id(ep_id, source_file=source)
-        assert result == "bridge_data_v2/env/task/ep/out.npy"
+        assert result == "nfs/foo/numpy_256/bridge_data_v2/env/task/ep/out.npy"
 
     def test_backslashes_normalised(self):
-        path = "bridge_data_v2\\env\\task\\ep\\out.npy"
+        path = "nfs\\mount\\bridge_data_v2\\env\\task\\ep\\out.npy"
         result = _normalize_episode_id(path)
         assert "\\" not in result
 

@@ -79,8 +79,9 @@ vla-data-forge/
 ├── scripts/
 │   ├── visualize_ecot.py      Inspect ECoT reasoning annotations
 │   ├── visualize_bridge.py    Visualize Bridge v2 episodes
+│   ├── visualize_curated.py   Visualize curated RLDS episodes (images + reasoning)
 │   ├── generate_traces.py     Run reasoning-trace generation pipeline
-│   ├── curate_interleaved.py  Merge ECoT + Bridge v2
+│   ├── curate_interleaved.py  Merge ECoT + Bridge v2 → RLDS TFRecords
 │   └── validate_dataset.py    Validate curated JSONL output
 │
 └── tests/
@@ -216,7 +217,30 @@ Default episode cap: `--max-episodes 5`. Default frame cap: `--max-frames 16`.
 
 ---
 
-### 4. Curate interleaved dataset
+### 4. Visualize curated dataset
+
+After curation, inspect a random episode — dual cameras + reasoning annotations:
+
+```bash
+# Random episode from the full dataset:
+python scripts/visualize_curated.py \
+    --path outputs/curated/vla_curated_dataset/full/1.0.0
+
+# Random episode from reasoning_only:
+python scripts/visualize_curated.py \
+    --path outputs/curated/vla_curated_dataset/reasoning_only/1.0.0
+
+# Specific episode index, more frames:
+python scripts/visualize_curated.py \
+    --path outputs/curated/vla_curated_dataset/full/1.0.0 \
+    --episode-index 42 --max-frames 24
+```
+
+Saves two files to `outputs/viz/curated/`:
+- `ep00042_full_grid.png` — frame grid: primary + wrist camera per step with task/subtask/move reasoning and action overlaid, colour-coded by alignment confidence
+- `ep00042_full_timeline.png` — vertical confidence + reasoning timeline across all steps
+
+### 5. Curate interleaved dataset
 
 Merges ECoT reasoning annotations with Bridge v2 observations and actions.
 The default output format is **RLDS** (Bridge v2 compatible TFRecord files).
