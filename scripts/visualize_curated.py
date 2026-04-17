@@ -5,8 +5,7 @@ Produces one PNG per step for each split (train, val, etc.).
 Each PNG shows everything in the curated dataset:
   - Header:   "Step 0 / 27  —  <task instruction>"
   - Row 1:    4 camera views (image_0 … image_3)
-  - Row 2:    Left panel  — 6 ECoT reasoning fields + caption
-              Right panel — action, state, ECoT features, alignment confidence
+  - Row 2:    4 columns of text information (reasoning, features, metadata)
 
 Usage
 -----
@@ -75,7 +74,6 @@ def _get_splits(dataset_path: Path) -> list[str]:
 
 
 def _t(val) -> str:
-    """Decode a TF bytes tensor to a Python str."""
     v = val.numpy() if hasattr(val, "numpy") else val
     if isinstance(v, bytes):
         return v.decode("utf-8", errors="replace")
@@ -88,7 +86,6 @@ def _arr(val) -> np.ndarray:
 
 
 def _parse_episode_metadata(episode) -> dict:
-    """Parse episode-level metadata."""
     meta = episode.get("episode_metadata", {})
     return {
         "file_path":   _t(meta.get("file_path", b"")),
@@ -108,56 +105,48 @@ def _parse_steps(episode) -> list[dict]:
         reasoning = step["reasoning"]
         ecot = step["ecot_features"]
         steps.append({
-            # Images
             "image_0":     _arr(obs["image_0"]).astype(np.uint8),
             "image_1":     _arr(obs["image_1"]).astype(np.uint8),
             "image_2":     _arr(obs["image_2"]).astype(np.uint8),
             "image_3":     _arr(obs["image_3"]).astype(np.uint8),
-            # State
             "state":       _arr(obs["state"]).astype(np.float32),
-            # Action
             "action":      _arr(step["action"]).astype(np.float32),
-            # Language
             "language_instruction": _t(step["language_instruction"]),
             "language_embedding":   _arr(step["language_embedding"]).astype(np.float32),
-            # Flags
             "is_first":    bool(_arr(step["is_first"])),
             "is_last":     bool(_arr(step["is_last"])),
             "is_terminal": bool(_arr(step["is_terminal"])),
             "reward":      float(_arr(step["reward"])),
             "discount":    float(_arr(step["discount"])),
-            # ECoT reasoning (6 fields)
             "task":            _t(reasoning["task"]),
             "plan":            _t(reasoning["plan"]),
             "subtask":         _t(reasoning["subtask"]),
             "subtask_reason":  _t(reasoning["subtask_reason"]),
             "move":            _t(reasoning["move"]),
             "move_reason":     _t(reasoning["move_reason"]),
-            # ECoT features
             "caption":          _t(ecot["caption"]),
             "move_primitive":   _t(ecot["move_primitive"]),
             "gripper_position": _arr(ecot["gripper_position"]).astype(np.float32),
             "bboxes":           _t(ecot["bboxes"]),
             "state_3d":         _arr(ecot["state_3d"]).astype(np.float32),
-            # Curation
             "alignment_confidence": float(_arr(step["alignment_confidence"])),
         })
     return steps
 
 
 # ---------------------------------------------------------------------------
-# Per-step figure
+# Drawing helpers
 # ---------------------------------------------------------------------------
 
 def _conf_color(c: float) -> str:
     if c >= 0.95:
-        return "#2ecc71"   # green  — direct annotation
+        return "#2ecc71"
     if c >= 0.4:
-        return "#e67e22"   # orange — propagated
-    return "#e74c3c"       # red    — no match
+        return "#e67e22"
+    return "#e74c3c"
 
 
-def _wrap(text: str, width: int = 58) -> str:
+def _wrap(text: str, width: int = 32) -> str:
     if not text:
         return "—"
     words = text.split()
@@ -175,51 +164,53 @@ def _wrap(text: str, width: int = 58) -> str:
 
 
 def _has_content(img: np.ndarray) -> bool:
-    """True if the image has any non-zero pixel."""
     return img.size > 0 and img.max() > 0
 
 
 def _show_image(ax, img, title):
-    """Render an image or 'No image' placeholder on an axes."""
     if _has_content(img):
         ax.imshow(img)
     else:
         ax.set_facecolor("#e0e0e0")
         ax.text(0.5, 0.5, "No image", ha="center", va="center",
-                transform=ax.transAxes, fontsize=8, color="#888")
-    ax.set_title(title, fontsize=8, color="black", pad=3)
+                transform=ax.transAxes, fontsize=28, color="#888")
+    ax.set_title(title, fontsize=28, color="black", pad=8)
     ax.axis("off")
     for spine in ax.spines.values():
         spine.set_visible(True)
         spine.set_edgecolor("#cccccc")
-        spine.set_linewidth(0.6)
+        spine.set_linewidth(1.0)
 
 
-def _draw_text_section(ax, y, label, text, color="#1a1a1a",
-                       label_size=7.5, body_size=8, width=58):
+def _draw_section(ax, y, label, text, width=32):
     """Draw a labelled text section and return the new y position."""
-    LINE_H = 0.035
-    LABEL_H = 0.042
-    GAP = 0.012
+    LINE_H = 0.028
+    LABEL_H = 0.035
+    GAP = 0.010
 
     wrapped = _wrap(text, width=width)
     n_lines = wrapped.count("\n") + 1
 
-    ax.text(0.02, y, label, transform=ax.transAxes,
-            fontsize=label_size, fontweight="bold", color="#555555",
+    ax.text(0.04, y, label, transform=ax.transAxes,
+            fontsize=26, fontweight="bold", color="#555555",
             verticalalignment="top")
     y -= LABEL_H
 
-    ax.text(0.02, y, wrapped, transform=ax.transAxes,
-            fontsize=body_size, color=color,
+    ax.text(0.04, y, wrapped, transform=ax.transAxes,
+            fontsize=26, color="#1a1a1a",
             verticalalignment="top", fontfamily="sans-serif")
     y -= LINE_H * n_lines + GAP
 
-    ax.axhline(y + GAP * 0.4, color="#eeeeee", linewidth=0.5,
-               xmin=0.02, xmax=0.98)
+    ax.axhline(y + GAP * 0.4, color="#dddddd", linewidth=0.8,
+               xmin=0.04, xmax=0.96)
     y -= GAP * 0.4
 
     return y
+
+
+# ---------------------------------------------------------------------------
+# Per-step figure
+# ---------------------------------------------------------------------------
 
 
 def _save_step_figure(
@@ -230,7 +221,7 @@ def _save_step_figure(
     split: str = "",
     ep_meta: dict | None = None,
 ) -> None:
-    fig = plt.figure(figsize=(18, 14), facecolor="white")
+    fig = plt.figure(figsize=(72, 56), facecolor="white")
 
     task = step["language_instruction"] or "—"
     flags = []
@@ -245,151 +236,141 @@ def _save_step_figure(
 
     fig.suptitle(
         f"Step {step_idx} / {total_steps - 1}{flag_str}{split_str}   —   {task}",
-        fontsize=11, fontweight="bold", color="black", y=0.99,
+        fontsize=40, fontweight="bold", color="black", y=0.995,
     )
 
     # =====================================================================
-    # Layout: 2 rows
+    # Layout: 2 rows x 4 columns
     #   Row 0: 4 camera images
-    #   Row 1: left = reasoning text,  right = action/state/features/meta
+    #   Row 1: 4 text columns
     # =====================================================================
     outer = gridspec.GridSpec(
-        2, 1, figure=fig,
-        left=0.02, right=0.98,
-        top=0.95, bottom=0.02,
-        hspace=0.08,
-        height_ratios=[1, 1.8],
+        2, 4, figure=fig,
+        left=0.01, right=0.99,
+        top=0.97, bottom=0.01,
+        hspace=0.06, wspace=0.03,
+        height_ratios=[1, 2],
     )
 
     # ── Row 0: 4 cameras ────────────────────────────────────────────────
-    gs_cams = gridspec.GridSpecFromSubplotSpec(
-        1, 4, subplot_spec=outer[0], wspace=0.04,
-    )
-
     cam_labels = ["Camera 0 (primary)", "Camera 1 (wrist)",
                   "Camera 2", "Camera 3"]
     for ci, cam_key in enumerate(["image_0", "image_1", "image_2", "image_3"]):
-        ax = fig.add_subplot(gs_cams[0, ci])
+        ax = fig.add_subplot(outer[0, ci])
         _show_image(ax, step[cam_key], cam_labels[ci])
 
-    # ── Row 1: two columns — reasoning | data ───────────────────────────
-    gs_bottom = gridspec.GridSpecFromSubplotSpec(
-        1, 2, subplot_spec=outer[1], wspace=0.04,
-        width_ratios=[1.1, 1],
-    )
+    # ── Column 0: Task + Plan + Caption ─────────────────────────────────
+    ax0 = fig.add_subplot(outer[1, 0])
+    ax0.set_facecolor("white")
+    ax0.axis("off")
+    y = 0.97
+    y = _draw_section(ax0, y, "Caption", step["caption"])
+    y = _draw_section(ax0, y, "Task", step["task"])
+    y = _draw_section(ax0, y, "Plan", step["plan"])
 
-    # ── Left: reasoning + caption ────────────────────────────────────────
-    ax_r = fig.add_subplot(gs_bottom[0, 0])
-    ax_r.set_facecolor("white")
-    ax_r.axis("off")
+    # ── Column 1: Subtask + Move reasoning ──────────────────────────────
+    ax1 = fig.add_subplot(outer[1, 1])
+    ax1.set_facecolor("white")
+    ax1.axis("off")
+    y = 0.97
+    y = _draw_section(ax1, y, "Subtask", step["subtask"])
+    y = _draw_section(ax1, y, "Subtask reason", step["subtask_reason"])
+    y = _draw_section(ax1, y, "Move", step["move"])
+    y = _draw_section(ax1, y, "Move reason", step["move_reason"])
 
-    y = 0.98
-    reasoning_sections = [
-        ("Caption",        step["caption"]),
-        ("Task",           step["task"]),
-        ("Plan",           step["plan"]),
-        ("Subtask",        step["subtask"]),
-        ("Subtask reason", step["subtask_reason"]),
-        ("Move",           step["move"]),
-        ("Move reason",    step["move_reason"]),
-    ]
-    for label, text in reasoning_sections:
-        y = _draw_text_section(ax_r, y, label, text, width=62)
+    # ── Column 2: Action + State + Reward ───────────────────────────────
+    ax2 = fig.add_subplot(outer[1, 2])
+    ax2.set_facecolor("white")
+    ax2.axis("off")
+    y = 0.97
 
-    # ── Right: action, state, ECoT features, alignment, metadata ──────���─
-    ax_d = fig.add_subplot(gs_bottom[0, 1])
-    ax_d.set_facecolor("white")
-    ax_d.axis("off")
-
-    y = 0.98
     act = step["action"]
-    state = step["state"]
-    conf = step["alignment_confidence"]
-    grip_pos = step["gripper_position"]
-    s3d = step["state_3d"]
-
-    # Action
     action_str = (
-        f"dxyz  [{act[0]:+.4f}, {act[1]:+.4f}, {act[2]:+.4f}]\n"
-        f"drpy  [{act[3]:+.4f}, {act[4]:+.4f}, {act[5]:+.4f}]\n"
-        f"grip   {act[6]:.4f}  ({'OPEN ' if act[6] > 0.5 else 'CLOSE'})"
+        f"dxyz [{act[0]:+.4f}, {act[1]:+.4f}, {act[2]:+.4f}]\n"
+        f"drpy [{act[3]:+.4f}, {act[4]:+.4f}, {act[5]:+.4f}]\n"
+        f"grip  {act[6]:.4f}  ({'OPEN ' if act[6] > 0.5 else 'CLOSE'})"
     )
-    y = _draw_text_section(ax_d, y, "Action (7-DoF)", action_str, body_size=7.5)
+    y = _draw_section(ax2, y, "Action (7-DoF)", action_str)
 
-    # State
+    st = step["state"]
     state_str = (
-        f"[{state[0]:+.3f}, {state[1]:+.3f}, {state[2]:+.3f},\n"
-        f" {state[3]:+.3f}, {state[4]:+.3f}, {state[5]:+.3f}, {state[6]:+.3f}]"
+        f"[{st[0]:+.3f}, {st[1]:+.3f}, {st[2]:+.3f},\n"
+        f" {st[3]:+.3f}, {st[4]:+.3f}, {st[5]:+.3f},\n"
+        f" {st[6]:+.3f}]"
     )
-    y = _draw_text_section(ax_d, y, "State (7-DoF)", state_str, body_size=7.5)
+    y = _draw_section(ax2, y, "State (7-DoF)", state_str)
 
-    # Reward / Discount
-    rd_str = f"reward={step['reward']:.2f}   discount={step['discount']:.2f}"
-    y = _draw_text_section(ax_d, y, "Reward / Discount", rd_str, body_size=7.5)
+    rd_str = f"reward = {step['reward']:.2f}\ndiscount = {step['discount']:.2f}"
+    y = _draw_section(ax2, y, "Reward / Discount", rd_str)
 
-    # Alignment confidence
+    conf = step["alignment_confidence"]
     conf_label = (
         "direct annotation (1.0)" if conf >= 0.95 else
         f"propagated ({conf:.2f})" if conf >= 0.4 else
         f"no ECoT match ({conf:.2f})"
     )
-    ax_d.text(0.02, y, "Alignment confidence", transform=ax_d.transAxes,
-              fontsize=7.5, fontweight="bold", color="#555555",
-              verticalalignment="top")
-    y -= 0.042
-    ax_d.text(0.02, y, conf_label, transform=ax_d.transAxes,
-              fontsize=8, color=_conf_color(conf),
-              verticalalignment="top", fontweight="bold")
-    y -= 0.035 + 0.012
-    ax_d.axhline(y + 0.005, color="#eeeeee", linewidth=0.5,
-                 xmin=0.02, xmax=0.98)
-    y -= 0.005
+    ax2.text(0.04, y, "Alignment confidence", transform=ax2.transAxes,
+             fontsize=26, fontweight="bold", color="#555555",
+             verticalalignment="top")
+    y -= 0.035
+    ax2.text(0.04, y, conf_label, transform=ax2.transAxes,
+             fontsize=26, color=_conf_color(conf),
+             verticalalignment="top", fontweight="bold")
+    y -= 0.028 + 0.010
+    ax2.axhline(y + 0.004, color="#dddddd", linewidth=0.8,
+                xmin=0.04, xmax=0.96)
+    y -= 0.004
 
-    # Move primitive
-    y = _draw_text_section(
-        ax_d, y, "Move primitive",
-        step["move_primitive"] or "—", body_size=7.5,
-    )
+    # ── Column 3: ECoT features + embedding + metadata ──────────────────
+    ax3 = fig.add_subplot(outer[1, 3])
+    ax3.set_facecolor("white")
+    ax3.axis("off")
+    y = 0.97
 
-    # ECoT state_3d
-    s3d_str = f"[{s3d[0]:.4f}, {s3d[1]:.4f}, {s3d[2]:.4f}]"
-    y = _draw_text_section(ax_d, y, "ECoT state_3d", s3d_str, body_size=7.5)
+    y = _draw_section(ax3, y, "Move primitive", step["move_primitive"] or "—")
 
-    # Gripper position
-    gp_str = f"[{grip_pos[0]:.1f}, {grip_pos[1]:.1f}]"
-    y = _draw_text_section(ax_d, y, "Gripper position (px)", gp_str, body_size=7.5)
+    s3d = step["state_3d"]
+    y = _draw_section(ax3, y, "ECoT state_3d",
+                      f"[{s3d[0]:.4f}, {s3d[1]:.4f}, {s3d[2]:.4f}]")
 
-    # Bboxes
+    gp = step["gripper_position"]
+    y = _draw_section(ax3, y, "Gripper position (px)",
+                      f"[{gp[0]:.1f}, {gp[1]:.1f}]")
+
     bbox_text = step["bboxes"] if step["bboxes"] else "—"
-    if len(bbox_text) > 120:
-        bbox_text = bbox_text[:120] + "..."
-    y = _draw_text_section(ax_d, y, "Bboxes", bbox_text, body_size=7)
+    if len(bbox_text) > 200:
+        bbox_text = bbox_text[:200] + " ..."
+    y = _draw_section(ax3, y, "Bboxes", bbox_text)
 
-    # Language embedding (just show norm + first 5 dims)
     emb = step["language_embedding"]
     emb_norm = float(np.linalg.norm(emb))
     if emb_norm > 0:
         emb_str = (
-            f"norm={emb_norm:.3f}  "
-            f"[{emb[0]:.3f}, {emb[1]:.3f}, {emb[2]:.3f}, {emb[3]:.3f}, {emb[4]:.3f}, ...]"
+            f"norm = {emb_norm:.3f}\n"
+            f"[{emb[0]:.3f}, {emb[1]:.3f}, {emb[2]:.3f},\n"
+            f" {emb[3]:.3f}, {emb[4]:.3f}, ...]"
         )
     else:
         emb_str = "zeros (no embedding)"
-    y = _draw_text_section(ax_d, y, "Language embedding (512-d)", emb_str, body_size=7)
+    y = _draw_section(ax3, y, "Language embedding (512-d)", emb_str)
 
-    # Episode metadata (if available)
     if ep_meta:
+        fp = ep_meta["file_path"]
+        if len(fp) > 40:
+            fp = "..." + fp[-40:]
         meta_str = (
-            f"file_path: {ep_meta['file_path'][-60:]}\n"
-            f"episode_id: {ep_meta['episode_id']}   "
-            f"has_img: [{int(ep_meta['has_image_0'])},{int(ep_meta['has_image_1'])},"
-            f"{int(ep_meta['has_image_2'])},{int(ep_meta['has_image_3'])}]   "
+            f"file: {fp}\n"
+            f"ep_id: {ep_meta['episode_id']}\n"
+            f"has_img: [{int(ep_meta['has_image_0'])},"
+            f"{int(ep_meta['has_image_1'])},"
+            f"{int(ep_meta['has_image_2'])},"
+            f"{int(ep_meta['has_image_3'])}]\n"
             f"has_lang: {int(ep_meta['has_language'])}"
         )
-        y = _draw_text_section(ax_d, y, "Episode metadata", meta_str, body_size=6.5)
+        y = _draw_section(ax3, y, "Episode metadata", meta_str)
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=130,
+    fig.savefig(save_path, dpi=40,
                 facecolor="white", edgecolor="none")
     plt.close(fig)
 
@@ -425,7 +406,6 @@ def _visualize_split(
         steps = steps[:max_frames]
     total = len(steps)
 
-    # Console summary
     n_with_r = sum(1 for s in steps if s["task"])
     conf_vals = [s["alignment_confidence"] for s in steps]
 
@@ -446,8 +426,7 @@ def _visualize_split(
     t.add_row("Has language",   str(ep_meta["has_language"]))
     console.print(t)
 
-    # Save one PNG per step
-    variant = dataset_path.parent.name  # "matched" or "reasoning_only"
+    variant = dataset_path.parent.name
     ep_dir = save_dir / split / f"ep{episode_index:05d}_{variant}"
     ep_dir.mkdir(parents=True, exist_ok=True)
 
@@ -459,8 +438,6 @@ def _visualize_split(
             console.print(f"  {i+1}/{total}")
 
     console.print(f"[green]Done.[/green]  {total} PNGs → {ep_dir}")
-
-    # Assemble video (1 fps)
     _make_video(ep_dir, total)
 
 
