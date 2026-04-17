@@ -184,9 +184,9 @@ def _show_image(ax, img, title):
 
 def _draw_section(ax, y, label, text, width=28):
     """Draw a labelled text section and return the new y position."""
-    LINE_H = 0.060
-    LABEL_H = 0.076
-    GAP = 0.020
+    LINE_H = 0.040
+    LABEL_H = 0.050
+    GAP = 0.015
 
     wrapped = _wrap(text, width=width)
     n_lines = wrapped.count("\n") + 1
@@ -321,11 +321,11 @@ def _save_step_figure(
     ax3.text(0.04, y, "Alignment confidence", transform=ax3.transAxes,
              fontsize=26, fontweight="bold", color="#555555",
              verticalalignment="top")
-    y -= 0.076
+    y -= 0.050
     ax3.text(0.04, y, conf_label, transform=ax3.transAxes,
              fontsize=26, color=_conf_color(conf),
              verticalalignment="top", fontweight="bold")
-    y -= 0.060 + 0.020
+    y -= 0.040 + 0.015
     ax3.axhline(y + 0.004, color="#dddddd", linewidth=0.8,
                 xmin=0.04, xmax=0.96)
     y -= 0.004
