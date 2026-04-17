@@ -240,27 +240,30 @@ def _save_step_figure(
     )
 
     # =====================================================================
-    # Layout: 2 rows x 4 columns
-    #   Row 0: 4 camera images
-    #   Row 1: 4 text columns
+    # Layout: Row 0 = 4 camera images, Row 1 = 5 text columns
     # =====================================================================
-    outer = gridspec.GridSpec(
-        2, 4, figure=fig,
+    img_row = gridspec.GridSpec(
+        1, 4, figure=fig,
         left=0.01, right=0.99,
-        top=0.97, bottom=0.01,
-        hspace=0.06, wspace=0.03,
-        height_ratios=[1, 2],
+        top=0.93, bottom=0.62,
+        wspace=0.03,
+    )
+    txt_row = gridspec.GridSpec(
+        1, 5, figure=fig,
+        left=0.01, right=0.99,
+        top=0.58, bottom=0.01,
+        wspace=0.03,
     )
 
     # ── Row 0: 4 cameras ────────────────────────────────────────────────
     cam_labels = ["Camera 0 (primary)", "Camera 1 (wrist)",
                   "Camera 2", "Camera 3"]
     for ci, cam_key in enumerate(["image_0", "image_1", "image_2", "image_3"]):
-        ax = fig.add_subplot(outer[0, ci])
+        ax = fig.add_subplot(img_row[0, ci])
         _show_image(ax, step[cam_key], cam_labels[ci])
 
-    # ── Column 0: Task + Plan + Caption ─────────────────────────────────
-    ax0 = fig.add_subplot(outer[1, 0])
+    # ── Col 0: Caption + Task + Plan ────────────────────────────────────
+    ax0 = fig.add_subplot(txt_row[0, 0])
     ax0.set_facecolor("white")
     ax0.axis("off")
     y = 0.97
@@ -268,8 +271,8 @@ def _save_step_figure(
     y = _draw_section(ax0, y, "Task", step["task"])
     y = _draw_section(ax0, y, "Plan", step["plan"])
 
-    # ── Column 1: Subtask + Move reasoning ──────────────────────────────
-    ax1 = fig.add_subplot(outer[1, 1])
+    # ── Col 1: Subtask + Move reasoning ─────────────────────────────────
+    ax1 = fig.add_subplot(txt_row[0, 1])
     ax1.set_facecolor("white")
     ax1.axis("off")
     y = 0.97
@@ -278,8 +281,8 @@ def _save_step_figure(
     y = _draw_section(ax1, y, "Move", step["move"])
     y = _draw_section(ax1, y, "Move reason", step["move_reason"])
 
-    # ── Column 2: Action + State + Reward ───────────────────────────────
-    ax2 = fig.add_subplot(outer[1, 2])
+    # ── Col 2: Action + State ───────────────────────────────────────────
+    ax2 = fig.add_subplot(txt_row[0, 2])
     ax2.set_facecolor("white")
     ax2.axis("off")
     y = 0.97
@@ -303,29 +306,29 @@ def _save_step_figure(
     rd_str = f"reward = {step['reward']:.2f}\ndiscount = {step['discount']:.2f}"
     y = _draw_section(ax2, y, "Reward / Discount", rd_str)
 
+    # ── Col 3: Confidence + ECoT features ───────────────────────────────
+    ax3 = fig.add_subplot(txt_row[0, 3])
+    ax3.set_facecolor("white")
+    ax3.axis("off")
+    y = 0.97
+
     conf = step["alignment_confidence"]
     conf_label = (
         "direct annotation (1.0)" if conf >= 0.95 else
         f"propagated ({conf:.2f})" if conf >= 0.4 else
         f"no ECoT match ({conf:.2f})"
     )
-    ax2.text(0.04, y, "Alignment confidence", transform=ax2.transAxes,
+    ax3.text(0.04, y, "Alignment confidence", transform=ax3.transAxes,
              fontsize=26, fontweight="bold", color="#555555",
              verticalalignment="top")
     y -= 0.076
-    ax2.text(0.04, y, conf_label, transform=ax2.transAxes,
+    ax3.text(0.04, y, conf_label, transform=ax3.transAxes,
              fontsize=26, color=_conf_color(conf),
              verticalalignment="top", fontweight="bold")
     y -= 0.060 + 0.020
-    ax2.axhline(y + 0.004, color="#dddddd", linewidth=0.8,
+    ax3.axhline(y + 0.004, color="#dddddd", linewidth=0.8,
                 xmin=0.04, xmax=0.96)
     y -= 0.004
-
-    # ── Column 3: ECoT features + embedding + metadata ──────────────────
-    ax3 = fig.add_subplot(outer[1, 3])
-    ax3.set_facecolor("white")
-    ax3.axis("off")
-    y = 0.97
 
     y = _draw_section(ax3, y, "Move primitive", step["move_primitive"] or "—")
 
@@ -337,10 +340,16 @@ def _save_step_figure(
     y = _draw_section(ax3, y, "Gripper position (px)",
                       f"[{gp[0]:.1f}, {gp[1]:.1f}]")
 
+    # ── Col 4: Bboxes + Embedding + Episode metadata ────────────────────
+    ax4 = fig.add_subplot(txt_row[0, 4])
+    ax4.set_facecolor("white")
+    ax4.axis("off")
+    y = 0.97
+
     bbox_text = step["bboxes"] if step["bboxes"] else "—"
     if len(bbox_text) > 200:
         bbox_text = bbox_text[:200] + " ..."
-    y = _draw_section(ax3, y, "Bboxes", bbox_text)
+    y = _draw_section(ax4, y, "Bboxes", bbox_text)
 
     emb = step["language_embedding"]
     emb_norm = float(np.linalg.norm(emb))
@@ -352,7 +361,7 @@ def _save_step_figure(
         )
     else:
         emb_str = "zeros (no embedding)"
-    y = _draw_section(ax3, y, "Language embedding (512-d)", emb_str)
+    y = _draw_section(ax4, y, "Lang embedding (512-d)", emb_str)
 
     if ep_meta:
         fp = ep_meta["file_path"]
@@ -367,7 +376,7 @@ def _save_step_figure(
             f"{int(ep_meta['has_image_3'])}]\n"
             f"has_lang: {int(ep_meta['has_language'])}"
         )
-        y = _draw_section(ax3, y, "Episode metadata", meta_str)
+        y = _draw_section(ax4, y, "Episode metadata", meta_str)
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(save_path, dpi=130,
