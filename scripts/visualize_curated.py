@@ -146,7 +146,7 @@ def _conf_color(c: float) -> str:
     return "#e74c3c"
 
 
-def _wrap(text: str, width: int = 32) -> str:
+def _wrap(text: str, width: int = 28) -> str:
     if not text:
         return "—"
     words = text.split()
@@ -173,8 +173,8 @@ def _show_image(ax, img, title):
     else:
         ax.set_facecolor("#e0e0e0")
         ax.text(0.5, 0.5, "No image", ha="center", va="center",
-                transform=ax.transAxes, fontsize=28, color="#888")
-    ax.set_title(title, fontsize=28, color="black", pad=8)
+                transform=ax.transAxes, fontsize=14, color="#888")
+    ax.set_title(title, fontsize=14, color="black", pad=6)
     ax.axis("off")
     for spine in ax.spines.values():
         spine.set_visible(True)
@@ -182,22 +182,22 @@ def _show_image(ax, img, title):
         spine.set_linewidth(1.0)
 
 
-def _draw_section(ax, y, label, text, width=32):
+def _draw_section(ax, y, label, text, width=28):
     """Draw a labelled text section and return the new y position."""
-    LINE_H = 0.028
-    LABEL_H = 0.035
+    LINE_H = 0.030
+    LABEL_H = 0.038
     GAP = 0.010
 
     wrapped = _wrap(text, width=width)
     n_lines = wrapped.count("\n") + 1
 
     ax.text(0.04, y, label, transform=ax.transAxes,
-            fontsize=26, fontweight="bold", color="#555555",
+            fontsize=13, fontweight="bold", color="#555555",
             verticalalignment="top")
     y -= LABEL_H
 
     ax.text(0.04, y, wrapped, transform=ax.transAxes,
-            fontsize=26, color="#1a1a1a",
+            fontsize=13, color="#1a1a1a",
             verticalalignment="top", fontfamily="sans-serif")
     y -= LINE_H * n_lines + GAP
 
@@ -221,7 +221,7 @@ def _save_step_figure(
     split: str = "",
     ep_meta: dict | None = None,
 ) -> None:
-    fig = plt.figure(figsize=(72, 56), facecolor="white")
+    fig = plt.figure(figsize=(30, 24), facecolor="white")
 
     task = step["language_instruction"] or "—"
     flags = []
@@ -236,7 +236,7 @@ def _save_step_figure(
 
     fig.suptitle(
         f"Step {step_idx} / {total_steps - 1}{flag_str}{split_str}   —   {task}",
-        fontsize=40, fontweight="bold", color="black", y=0.995,
+        fontsize=18, fontweight="bold", color="black", y=0.995,
     )
 
     # =====================================================================
@@ -310,13 +310,13 @@ def _save_step_figure(
         f"no ECoT match ({conf:.2f})"
     )
     ax2.text(0.04, y, "Alignment confidence", transform=ax2.transAxes,
-             fontsize=26, fontweight="bold", color="#555555",
+             fontsize=13, fontweight="bold", color="#555555",
              verticalalignment="top")
-    y -= 0.035
+    y -= 0.038
     ax2.text(0.04, y, conf_label, transform=ax2.transAxes,
-             fontsize=26, color=_conf_color(conf),
+             fontsize=13, color=_conf_color(conf),
              verticalalignment="top", fontweight="bold")
-    y -= 0.028 + 0.010
+    y -= 0.030 + 0.010
     ax2.axhline(y + 0.004, color="#dddddd", linewidth=0.8,
                 xmin=0.04, xmax=0.96)
     y -= 0.004
@@ -370,7 +370,7 @@ def _save_step_figure(
         y = _draw_section(ax3, y, "Episode metadata", meta_str)
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=40,
+    fig.savefig(save_path, dpi=130,
                 facecolor="white", edgecolor="none")
     plt.close(fig)
 
