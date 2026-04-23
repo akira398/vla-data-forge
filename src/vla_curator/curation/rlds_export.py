@@ -353,6 +353,12 @@ def _make_builder_class():
           reasoning_only — only episodes with at least one non-empty reasoning
         """
 
+        # Skip TFDS's shuffle-bucket stage. Records are episode-level
+        # trajectories (no benefit to cross-example randomization), and the
+        # shuffle stage's bucket write/read/unlink cycle trips EINVAL on some
+        # shared HPC filesystems (e.g. /groups/AIC-MV Lustre-like storage).
+        DISABLE_SHUFFLING = True
+
         VERSION = tfds.core.Version("1.0.0")
         RELEASE_NOTES = {
             "1.0.0": "ECoT reasoning annotations fused with Bridge v2 demonstrations."
